@@ -871,6 +871,7 @@ const ROW_PITCH = 142; // > hauteur reelle max observee (~117px) pour garantir u
 // (violations identiques, ecarts residuels proportionnellement plus
 // grands) sans jamais changer quelles personnes sont fusionnees.
 const SIBLING_OFFSET = 142; // ecart applique quand deux personnes partagent les 2 memes parents (> CARD_H pour eviter tout chevauchement)
+const ROW_PITCH_MIN = CARD_H + 10; // ecart minimal (peu de generations affichees) : juste au-dessus de la hauteur d'une fiche
 const TOP_PAD = 8;
 const LEFT_PAD = 4;
 const HEADER_H = 44;
@@ -878,6 +879,7 @@ const HEADER_H = 44;
 // ---- mode vertical (ascendants empiles vers le haut) ----
 const SIB_PITCH_V = CARD_W + 40;   // ecart entre "freres/soeurs" affiches cote a cote (axe horizontal)
 const SIB_OFFSET_V = SIB_PITCH_V;
+const SIB_PITCH_V_MIN = CARD_W + 10; // ecart minimal (peu de generations affichees) : juste au-dessus de la largeur d'une fiche
 const LEFT_PAD_V = 150;  // marge de gauche reservee aux etiquettes de generation
 
 const MONTHS = {JAN:"janvier",FEB:"février",MAR:"mars",APR:"avril",MAY:"mai",JUN:"juin",JUL:"juillet",AUG:"août",SEP:"septembre",OCT:"octobre",NOV:"novembre",DEC:"décembre"};
@@ -950,6 +952,19 @@ function computeAge(birth, death){
 function colGapFor(vmg){
   if(vmg<=1) return COL_GAP_MIN;
   return COL_GAP_MIN + (COL_GAP_MAX-COL_GAP_MIN) * Math.min(1, (vmg-1)/7);
+}
+
+// meme principe d'interpolation que colGapFor, mais pour l'axe des freres et
+// soeurs (orthogonal aux generations) : replier des generations libere de la
+// place qui n'a plus besoin d'etre reservee pour des cousinages profonds,
+// desormais masques -- sans quoi l'espace vertical (mode horizontal) ou
+// horizontal (mode vertical) entre les fiches restait toujours celui
+// necessaire a l'arbre complet, meme une fois repli a 2-3 generations.
+// `min` reste toujours strictement superieur a la dimension de la fiche sur
+// cet axe (sans quoi 2 fiches voisines se chevaucheraient).
+function sibPitchFor(base, min, vmg){
+  if(vmg<=1) return min;
+  return min + (base-min) * Math.min(1, (vmg-1)/7);
 }
 
 // genere a la volee plutot qu'une liste figee : le nombre de generations
@@ -1421,6 +1436,16 @@ function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, S
 // branche paternelle / maternelle relative a la racine courante (et non plus
 // figee sur Geneviève) : on remonte depuis chacun des deux parents de la
 // racine ; un ancetre atteint depuis les deux cotes est "shared".
+// vrai cul-de-sac genealogique : ni ascendance connue, ni fiche "ascendance
+// inconnue" injectee a la place (cf. addUnknownAncestorPlaceholders, qui
+// donne desormais des PARENTS a tout le monde) -- sans cette distinction,
+// plus personne n'est jamais "mort" au sens de la marche paternelle/
+// maternelle ci-dessous, qui perd alors sa fourche et colore tout l'arbre
+// d'une seule teinte. Repere le 2026-09-21.
+function isGenealogicalDeadEnd(key){
+  const par = PARENTS[key];
+  return !par || (PEOPLE[par.father] && PEOPLE[par.father].isPlaceholder);
+}
 function computeBranches(rootKey, order){
   const branch = {[rootKey]:"root"};
   const par0 = PARENTS[rootKey];
@@ -1435,7 +1460,7 @@ function computeBranches(rootKey, order){
   // chemin gardent le cote (paternel/maternel) par lequel on les a atteints.
   const pSide = [pRoot], mSide = [mRoot];
   while(true){
-    const pDead = !PARENTS[pRoot], mDead = !PARENTS[mRoot];
+    const pDead = isGenealogicalDeadEnd(pRoot), mDead = isGenealogicalDeadEnd(mRoot);
     if(pDead===mDead) break; // les deux continuent (fourche valable), ou aucun (rien de plus a faire)
     if(mDead){ const pp=PARENTS[pRoot]; pRoot=pp.father; mRoot=pp.mother; }
     else { const mp=PARENTS[mRoot]; mRoot=mp.mother; pRoot=mp.father; }
@@ -1934,9 +1959,11 @@ function applyGenVisibility(){
   // le 2026-09-20 (capture ecran utilisateur : comparaison generation VIII
   // vs IX affichee, meme arbre, tout le reste du placement change).
   let genPitch, S, axisStagger, axisMaxLane;
+  const sibPitchV = sibPitchFor(SIB_PITCH_V, SIB_PITCH_V_MIN, visibleMaxGen);
+  const sibPitchH = sibPitchFor(ROW_PITCH, ROW_PITCH_MIN, visibleMaxGen);
   ({P:S, stagger:axisStagger, maxLane:axisMaxLane} = isV
-    ? computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V)
-    : computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET));
+    ? computeAxis(currentOrder, currentMaxGen, sibPitchV, sibPitchV)
+    : computeAxis(currentOrder, currentMaxGen, sibPitchH, sibPitchH));
   // decalage sur l'axe des generations (colonnes en horizontal, rangees en
   // vertical) pour les rares fiches que computeAxis a du ecarter dans une
   // voie secondaire (cf. son propre commentaire) -- jamais sur l'axe des

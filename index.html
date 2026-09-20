@@ -417,6 +417,11 @@ header.masthead .sub b{ color:var(--ink); font-weight:600; }
   display:block; border-radius:3px;
   box-shadow:0 20px 50px -20px rgba(0,0,0,.6);
   background:#fff;
+  /* sans ca, le navigateur demarre son propre glisse-depose natif de l'image
+     (curseur "interdit", fantome de l'image qui suit la souris) des qu'on
+     bouge la souris bouton gauche enfonce sur elle, qui vient concurrencer
+     le glisse-deplace personnalise ci-dessous (defilement saccade). */
+  -webkit-user-drag:none; user-drag:none; -webkit-user-select:none; user-select:none;
 }
 .acte-viewer-close{
   position:fixed; top:1.2rem; right:1.2rem; z-index:61;
@@ -550,7 +555,7 @@ footer a{ color:var(--brass); }
     <span class="acte-viewer-zoom-pct" id="acteViewerZoomPct">100%</span>
   </div>
   <div class="acte-viewer-stage" id="acteViewerStage">
-    <img id="acteViewerImg" alt="Acte d'état civil">
+    <img id="acteViewerImg" alt="Acte d'état civil" draggable="false">
   </div>
 </div>
 <button class="back-btn" id="backBtn" title="Revenir à l'affichage précédent">← <span id="backBtnLabel">Retour</span></button>
@@ -1494,12 +1499,18 @@ function closeActeViewer(){
   document.getElementById("acteViewer").classList.remove("open");
   acteViewerImg.src = "";
 }
-// ferme uniquement sur un clic direct sur le fond sombre lui-meme (ni sur
-// l'acte, ni sur le curseur de zoom, ni pendant/apres un glisse-deplace) :
-// on verifie la cible exacte plutot que de multiplier les stopPropagation
-// sur chaque element enfant.
+// ferme sur un clic n'importe ou hors de l'acte lui-meme (le fond sombre
+// autour, meme a l'interieur de la zone de defilement qui le recouvre
+// entierement) — sauf sur le curseur de zoom, le bouton de fermeture (deja
+// gere ailleurs), ou juste apres un glisse-deplace qui a reellement bouge
+// (sinon relacher le clic apres avoir fait defiler l'acte fermait la
+// visionneuse au lieu de simplement arreter le glisse).
+let acteJustDragged = false;
 document.getElementById("acteViewer").addEventListener("click", e=>{
-  if(e.target.id === "acteViewer") closeActeViewer();
+  if(acteJustDragged){ acteJustDragged = false; return; }
+  if(e.target === acteViewerImg) return;
+  if(e.target.closest(".acte-viewer-zoom-wrap, .acte-viewer-close")) return;
+  closeActeViewer();
 });
 
 // ---------- Deplacement dans l'acte agrandi par clic-glisse ----------
@@ -1516,6 +1527,9 @@ document.getElementById("acteViewer").addEventListener("click", e=>{
     dragging = true; moved = false;
     startX = e.clientX; startY = e.clientY;
     startLeft = acteViewerStage.scrollLeft; startTop = acteViewerStage.scrollTop;
+    // empeche le glisse-depose natif de l'image (cf. -webkit-user-drag) de
+    // demarrer avant meme le premier mousemove.
+    e.preventDefault();
   });
   window.addEventListener("mousemove", e=>{
     if(!dragging) return;
@@ -1530,12 +1544,7 @@ document.getElementById("acteViewer").addEventListener("click", e=>{
     e.preventDefault();
   });
   function endDrag(){
-    // un glisse qui a reellement bouge ne doit pas en plus etre interprete
-    // comme un clic sur le fond (qui fermerait la visionneuse) : le mouseup
-    // suivant un mousedown+mousemove sur la zone ne genere de toute facon
-    // pas de "click" tant que la cible reste la meme (la zone elle-meme,
-    // jamais "acteViewer"), donc rien de plus a faire ici que reinitialiser
-    // l'etat de glisse.
+    if(moved) acteJustDragged = true;
     dragging = false; moved = false;
     acteViewerStage.classList.remove("panning");
   }

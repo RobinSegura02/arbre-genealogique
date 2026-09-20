@@ -998,19 +998,50 @@ function buildOrder(rootKey){
 // de fiche) et pour l'axe horizontal (mode vertical, pitch=largeur de fiche).
 function computeAxis(order, maxGen, pitch, offset){
   const P = {};
-  // ancre chaque "feuille" a un point espace de `pitch`, dans l'ordre naturel
-  // de l'arbre (generation la plus profonde d'abord) : soit parce qu'elle est
-  // au niveau le plus profond actuellement affiche (maxGen, meme si cette
-  // personne a en realite des ancetres plus loin, replies hors de cette vue),
-  // soit parce qu'elle n'a vraiment aucun PARENTS[key] connu, meme a une
-  // generation moins profonde (ex. le pere d'un descendant re-centre comme
-  // racine, sans ascendance propre documentee) -- sans quoi sa position reste
-  // indefinie.
+  const depthOf = {};
+  for(let g=0; g<=maxGen; g++){
+    (order[g]||[]).forEach(key=>{ depthOf[key] = g; });
+  }
+  // ancre chaque "feuille" par un PARCOURS RECURSIF EN POSTFIXE depuis la
+  // racine (pere d'abord, puis mere, recursivement) : une feuille (sans
+  // PARENTS[key] connu, ou a la limite de profondeur actuellement chargee,
+  // meme si elle a en realite des ancetres plus loin, hors de cette vue)
+  // recoit un point espace de `pitch` au moment ou on l'atteint ; toute
+  // personne intermediaire est ensuite exactement la moyenne de ses 2
+  // parents, deja positionnes puisqu'on descend jusqu'aux feuilles avant de
+  // remonter. C'est cet ordre de parcours -- qui suit la structure REELLE
+  // de l'arbre plutot qu'un simple compteur balayant les generations
+  // independamment d'elle -- qui garantit mathematiquement l'absence de
+  // croisement entre branches (2 sous-arbres traites en sequence, jamais
+  // entrelaces, ont necessairement des positions qui restent dans le meme
+  // ordre) et un tassement naturel (jamais artificiellement agrandi ni
+  // retreci). Repere le 2026-09-20 : l'ancienne version (compteur global
+  // parcourant `order[g]` generation par generation, du plus profond au
+  // plus proche de la racine, sans rapport avec la structure reelle des
+  // sous-arbres) produisait des ecarts de 213 a 1207px entre voisins d'une
+  // meme generation et des lignes de liaison traversant tout l'arbre.
   let i = 0;
+  function place(key){
+    if(P[key]!==undefined) return P[key]; // deja positionne (ancetre atteint 2 fois, ex. mariage entre cousins)
+    const par = PARENTS[key];
+    if(!par || depthOf[key]===undefined || depthOf[key]>=maxGen){
+      P[key] = TOP_PAD + i*pitch + pitch/2;
+      i++;
+      return P[key];
+    }
+    const fy = place(par.father);
+    const my = place(par.mother);
+    P[key] = (fy + my) / 2;
+    return P[key];
+  }
+  const rootKey = order[0] && order[0][0];
+  if(rootKey) place(rootKey);
+  // filet de securite : une personne presente dans `order` mais jamais
+  // atteinte par ce parcours (ne devrait pas arriver, `order` etant lui-meme
+  // construit depuis la racine via les memes liens PARENTS) reste tout de
+  // meme positionnee.
   for(let g=maxGen; g>=0; g--){
-    (order[g]||[]).forEach(key=>{
-      if(g===maxGen || !PARENTS[key]){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
-    });
+    (order[g]||[]).forEach(key=>{ if(P[key]===undefined) place(key); });
   }
 
   function averagingPass(){
@@ -1025,15 +1056,9 @@ function computeAxis(order, maxGen, pitch, offset){
       // (freres/soeurs retenus dans l'arbre) tombent naturellement sur le
       // meme point : on les ecarte symetriquement pour qu'elles restent
       // lisibles cote a cote. Fait ICI, generation par generation juste
-      // apres la moyenne de CETTE generation (et non comme passe separee
-      // apres coup sur tout l'arbre) : sinon, un rapprochement plus tardif
-      // de leurs propres parents (ex. conjoint-e sans ascendance ajuste-e
-      // par adjustLeafSpouses ci-dessous, qui relance averagingPass) n'etait
-      // jamais repercute sur leurs propres enfants, qui restaient calcules
-      // sur l'ancienne position d'avant ecartement -- repere le 2026-09-20
-      // (Jean Marie Louis Blaise Destouches reste decentre par rapport a
-      // Louis Jean Marie Destouches / Jeanne Marie Destouches, ses parents
-      // ecartes l'un de l'autre par cette regle).
+      // apres la moyenne de CETTE generation (et non comme passe separee),
+      // pour que l'ecartement soit repercute sur leurs propres enfants des
+      // la meme passe.
       const byParents = {};
       order[g].forEach(key=>{
         const par = PARENTS[key];
@@ -1049,6 +1074,11 @@ function computeAxis(order, maxGen, pitch, offset){
       });
     }
   }
+  // au moins une passe pour ecarter d'eventuels freres/soeurs places par
+  // `place()` exactement au meme point (memes 2 parents) -- sans quoi ce
+  // cas ne serait jamais traite si `adjustLeafSpouses` ci-dessous n'a rien a
+  // ajuster des le premier appel (boucle interrompue avant tout appel a
+  // `averagingPass`).
   averagingPass();
 
   // rapproche chaque "feuille" (sans PARENTS[key], donc positionnee au hasard
@@ -1096,35 +1126,23 @@ function computeAxis(order, maxGen, pitch, offset){
     averagingPass();
   }
 
-  // ---------- voies horizontales : aucune fiche etrangere "entre" 2
-  // conjoint-s ou 2 freres/soeurs, SANS jamais toucher a leur position sur
-  // l'axe des freres et soeurs (P, ci-dessus) ----------
-  // P[key] vient d'une moyenne recursive des ascendants : rien n'empeche la
-  // moyenne d'une personne totalement etrangere a un couple de tomber,
-  // numeriquement, entre les deux (arrive des que les 2 conjoint-s ont des
-  // ascendances de poids tres different, frequent depuis l'ajout des
-  // generations V/VI). Deux tentatives precedentes corrigeaient ca en
-  // DEPLACANT P (regression isotonique) -- efficace contre les fiches
-  // etrangeres, mais ca decentre alors les enfants de qui que ce soit dont
-  // la position ait ete corrigee (jusqu'a 1800px d'ecart observe pour un
-  // groupe de 10 personnes). Repere le 2026-09-20 (retours utilisateur
-  // successifs : d'abord Louis Francois Des Touches / Marie Joseph Le
-  // Borgne separes par une fiche etrangere, puis Genevieve deplacee a tort
-  // par la premiere correction, puis le meme probleme resurgissant sur un
-  // groupe entier de la genration IX).
-  //
-  // Cette fois, on ne touche plus jamais a P : chaque personne reste EXACTEMENT
-  // sur la moyenne de ses parents (centrage garanti a 100%, pour tout le
-  // monde). A la place, on affecte a chaque COUPLE (pere+mere -- toujours
-  // adjacents dans order[g], cf. buildOrder qui pousse `next.push(f, m)`)
-  // une "voie" horizontale : la premiere disponible qui ne chevauche aucun
-  // autre couple deja place dans cette meme voie (algorithme classique
-  // d'allocation de salles de reunion / interval scheduling). Un couple qui
-  // rentrerait en conflit avec un autre, deja pose, est simplement decale
-  // dans une voie adjacente (colStagger, ajoute a la position sur l'axe des
-  // generations dans applyGenVisibility) plutot que declasse verticalement :
-  // il n'apparait alors plus "entre" les fiches de la voie principale,
-  // tout en restant pile au milieu de ses vrais parents.
+  // ---------- filet de securite : aucune fiche etrangere "entre" 2
+  // conjoint-s ----------
+  // Le parcours recursif ci-dessus place chaque personne exactement sur la
+  // moyenne de ses parents, ce qui donne un tassement naturel et un ordre
+  // correct dans l'immense majorite des cas. Mais un couple dont les 2
+  // membres ont chacun leur PROPRE ascendance documentee, de "poids" tres
+  // different, peut malgre tout se retrouver tres eloigne l'un de l'autre
+  // sur cet axe (chacun place selon SA lignee, sans lien entre elles) --
+  // au point qu'un frere/soeur de l'un des deux (ecarte de lui par la regle
+  // ci-dessus) tombe alors visuellement "entre" les 2 conjoint-s. Repere le
+  // 2026-09-20 (Louis Jean Marie Destouches / Jeanne Marie Françoise
+  // Cotillard, separes de plus de 1500px, avec Jeanne Marie Destouches --
+  // soeur du premier -- entre les deux). Plutot que de deplacer P (ce qui
+  // decentrerait alors les enfants de la personne deplacee), on decale ici
+  // la fiche en trop dans une "voie" horizontale adjacente (jamais sur cet
+  // axe des freres et soeurs) -- meme mecanisme que pour un couple en
+  // conflit avec un autre couple.
   const stagger = {};
   for(let g=0; g<=maxGen; g++){
     const seq = order[g];
@@ -1145,8 +1163,8 @@ function computeAxis(order, maxGen, pitch, offset){
       pr.forEach(key=>{ stagger[key] = lane; });
     });
   }
-
   const maxLane = Object.values(stagger).reduce((m,v)=>Math.max(m,v), 0);
+
   return {P, stagger, maxLane};
 }
 function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, SIBLING_OFFSET).P; }
@@ -1578,19 +1596,18 @@ function applyGenVisibility(){
     ? computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V)
     : computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET));
   // decalage sur l'axe des generations (colonnes en horizontal, rangees en
-  // vertical) pour les personnes affectees a une "voie" secondaire par
-  // computeAxis (cf. son propre commentaire) -- jamais sur l'axe des freres
-  // et soeurs (S), qui reste toujours le centrage exact sur les parents.
+  // vertical) pour les rares fiches que computeAxis a du ecarter dans une
+  // voie secondaire (cf. son propre commentaire) -- jamais sur l'axe des
+  // freres et soeurs (S), qui reste toujours le centrage exact sur les
+  // parents.
   const STAGGER_GAP = 90;
   // le pas normal entre generations (colGapFor) ne reserve la place que
-  // pour 1 voie ; une generation qui en requiert plusieurs (ex. beaucoup de
-  // couples en conflit au meme niveau) doit elargir ce pas d'autant, sans
-  // quoi la derniere voie empiete sur la colonne de la generation suivante
-  // -- repere le 2026-09-20 (chevauchement de 80px entre une fiche decalee
-  // en voie 3 et la generation suivante). axisMaxLane vient de computeAxis,
-  // qui l'a calcule sur TOUTES les generations : on elargit donc le pas de
-  // maniere uniforme (le pas est le meme pour toutes les generations),
-  // meme si une seule d'entre elles en a reellement besoin.
+  // pour 1 voie ; une generation qui en requiert plusieurs doit elargir ce
+  // pas d'autant, sans quoi la derniere voie empiete sur la colonne de la
+  // generation suivante. axisMaxLane reste generalement 0 ou 1 avec le
+  // parcours recursif (le filet de securite ne s'active que sur de rares
+  // conflits), contrairement a l'ancienne version ou tout le placement
+  // passait par des voies.
   const staggerPad = axisMaxLane * STAGGER_GAP;
   if(isV){
     // moitie de l'ecart entre colonnes en horizontal (CARD_W+colGapFor) : le

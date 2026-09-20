@@ -400,9 +400,22 @@ header.masthead .sub b{ color:var(--ink); font-weight:600; }
   opacity:0; pointer-events:none; transition:opacity .2s ease;
 }
 .acte-viewer.open{ opacity:1; pointer-events:auto; }
-.acte-viewer img{
-  max-width:100%; max-height:100%; border-radius:3px;
-  box-shadow:0 20px 50px -20px rgba(0,0,0,.6); cursor:default;
+/* zone qui defile (zoom + glisse-deplace, cf. initActeDrag) : recouvre tout
+   l'espace disponible plutot que d'entourer l'image au plus juste, sinon le
+   glisse-deplace ne serait possible qu'en gardant le curseur pile sur
+   l'image (etroite des qu'on zoome), pas sur le reste du cadre sombre. */
+.acte-viewer-stage{
+  width:100%; height:100%; overflow:auto;
+  display:flex; cursor:grab;
+}
+.acte-viewer-stage.panning{ cursor:grabbing; user-select:none; }
+.acte-viewer-stage img{
+  margin:auto; /* centre l'image quand elle tient dans le cadre, tout en
+    restant entierement atteignable au defilement une fois zoomee — les
+    marges auto se comportent mieux que align-items:center sur un conteneur
+    debordant (celui-ci tronque parfois le debut du contenu au defilement). */
+  display:block; border-radius:3px;
+  box-shadow:0 20px 50px -20px rgba(0,0,0,.6);
   background:#fff;
 }
 .acte-viewer-close{
@@ -413,6 +426,32 @@ header.masthead .sub b{ color:var(--ink); font-weight:600; }
   cursor:pointer; display:flex; align-items:center; justify-content:center;
 }
 .acte-viewer-close:hover{ border-color:var(--brass); color:var(--ink); }
+
+/* curseur de zoom, vertical, cote droit de la visionneuse */
+.acte-viewer-zoom-wrap{
+  position:fixed; right:1.4rem; top:50%; transform:translateY(-50%); z-index:61;
+  display:flex; flex-direction:column; align-items:center; gap:.5rem;
+  font-family:"Fragment Mono",monospace; font-size:.68rem; color:rgba(255,255,255,.75);
+}
+.acte-viewer-zoom-track{ width:26px; height:150px; position:relative; }
+.acte-viewer-zoom{
+  -webkit-appearance:none; appearance:none;
+  position:absolute; left:50%; top:50%; width:150px; height:26px;
+  /* un input range horizontal tourne de 90 degres : technique la plus
+     compatible pour obtenir un curseur vertical (le support natif de
+     writing-mode sur <input type=range> reste inegal selon navigateurs). */
+  transform:translate(-50%,-50%) rotate(-90deg);
+  background:rgba(255,255,255,.25); border-radius:3px; outline:none; cursor:pointer; margin:0;
+}
+.acte-viewer-zoom::-webkit-slider-thumb{
+  -webkit-appearance:none; width:18px; height:18px; border-radius:50%;
+  background:var(--brass); cursor:pointer; border:2px solid #fff;
+}
+.acte-viewer-zoom::-moz-range-thumb{
+  width:18px; height:18px; border-radius:50%; background:var(--brass);
+  cursor:pointer; border:2px solid #fff;
+}
+.acte-viewer-zoom-pct{ min-width:2.6em; text-align:center; }
 
 /* ---------- Menu contextuel (clic droit) ---------- */
 .ctx-menu{
@@ -502,7 +541,17 @@ footer a{ color:var(--brass); }
 </aside>
 <div class="acte-viewer" id="acteViewer">
   <button class="acte-viewer-close" aria-label="Fermer">✕</button>
-  <img id="acteViewerImg" alt="Acte d'état civil" onclick="event.stopPropagation()">
+  <div class="acte-viewer-zoom-wrap">
+    <span>+</span>
+    <div class="acte-viewer-zoom-track">
+      <input type="range" class="acte-viewer-zoom" id="acteViewerZoom" min="100" max="400" step="10" value="100" aria-label="Zoom">
+    </div>
+    <span>−</span>
+    <span class="acte-viewer-zoom-pct" id="acteViewerZoomPct">100%</span>
+  </div>
+  <div class="acte-viewer-stage" id="acteViewerStage">
+    <img id="acteViewerImg" alt="Acte d'état civil">
+  </div>
 </div>
 <button class="back-btn" id="backBtn" title="Revenir à l'affichage précédent">← <span id="backBtnLabel">Retour</span></button>
 <div class="mode-switch" id="modeSwitch">
@@ -1390,20 +1439,109 @@ function renderSources(p, sp){
   if(!items) return "";
   return `<div class="detail-section"><h4>Sources</h4>${items}</div>`;
 }
+// echelle (naturalWidth/Height -> taille affichee a zoom 100%, i.e. l'acte
+// entier visible sans defilement) recalculee a chaque ouverture / chargement
+// d'image, puisqu'elle depend a la fois de la resolution propre de l'acte et
+// de la taille actuelle de la fenetre.
+let acteFitScale = 1;
+const acteViewerImg = document.getElementById("acteViewerImg");
+const acteViewerStage = document.getElementById("acteViewerStage");
+const acteViewerZoom = document.getElementById("acteViewerZoom");
+const acteViewerZoomPct = document.getElementById("acteViewerZoomPct");
+
+function computeActeFitScale(){
+  if(!acteViewerImg.naturalWidth) return;
+  const cw = acteViewerStage.clientWidth, ch = acteViewerStage.clientHeight;
+  // jamais agrandi au dela de sa taille native au zoom "ajuste" (100%) — le
+  // curseur sert ensuite exclusivement a zoomer PLUS loin dans l'acte, pas a
+  // l'etirer artificiellement au-dela de sa propre resolution.
+  acteFitScale = Math.min(cw/acteViewerImg.naturalWidth, ch/acteViewerImg.naturalHeight, 1);
+  updateActeZoom();
+}
+function updateActeZoom(){
+  if(!acteViewerImg.naturalWidth) return;
+  // garde le meme point de l'acte au centre de la zone visible avant/apres
+  // le changement de zoom (sans quoi chaque mouvement du curseur ramenait la
+  // vue au coin superieur gauche de l'image, perdant l'endroit qu'on
+  // regardait).
+  const oldW = acteViewerImg.offsetWidth || 1, oldH = acteViewerImg.offsetHeight || 1;
+  const cx = (acteViewerStage.scrollLeft + acteViewerStage.clientWidth/2) / oldW;
+  const cy = (acteViewerStage.scrollTop + acteViewerStage.clientHeight/2) / oldH;
+  const scale = acteFitScale * (acteViewerZoom.value/100);
+  const newW = acteViewerImg.naturalWidth*scale, newH = acteViewerImg.naturalHeight*scale;
+  acteViewerImg.style.width = newW+"px";
+  acteViewerImg.style.height = newH+"px";
+  acteViewerZoomPct.textContent = acteViewerZoom.value+"%";
+  acteViewerStage.scrollLeft = cx*newW - acteViewerStage.clientWidth/2;
+  acteViewerStage.scrollTop = cy*newH - acteViewerStage.clientHeight/2;
+}
+acteViewerZoom.addEventListener("input", updateActeZoom);
+acteViewerImg.addEventListener("load", computeActeFitScale);
+
 function openActeViewer(imgPath){
   // les actes sont des donnees:URI embarquees (ACTE_IMAGES) plutot que des
   // fichiers relatifs publies a part : un <img src="chemin relatif"> vers un
   // fichier joint a l'artefact ne s'est pas resolu correctement une fois la
   // page rendue chez l'utilisateur (image cassee) — on l'embarque donc au lieu
   // de compter sur la resolution d'URL relative a l'execution.
-  document.getElementById("acteViewerImg").src = ACTE_IMAGES[imgPath] || imgPath;
+  acteViewerZoom.value = 100;
+  acteViewerImg.style.width = "";
+  acteViewerImg.style.height = "";
+  acteViewerImg.src = ACTE_IMAGES[imgPath] || imgPath;
   document.getElementById("acteViewer").classList.add("open");
 }
 function closeActeViewer(){
   document.getElementById("acteViewer").classList.remove("open");
-  document.getElementById("acteViewerImg").src = "";
+  acteViewerImg.src = "";
 }
-document.getElementById("acteViewer").addEventListener("click", closeActeViewer);
+// ferme uniquement sur un clic direct sur le fond sombre lui-meme (ni sur
+// l'acte, ni sur le curseur de zoom, ni pendant/apres un glisse-deplace) :
+// on verifie la cible exacte plutot que de multiplier les stopPropagation
+// sur chaque element enfant.
+document.getElementById("acteViewer").addEventListener("click", e=>{
+  if(e.target.id === "acteViewer") closeActeViewer();
+});
+
+// ---------- Deplacement dans l'acte agrandi par clic-glisse ----------
+// Meme principe que le clic-glisse dans l'arbre (cf. initPanDrag) : un clic
+// gauche maintenu fait defiler la zone plutot que de devoir viser les
+// barres de defilement, utile des que l'acte deborde du cadre une fois
+// zoome.
+(function initActeDrag(){
+  let dragging = false, moved = false;
+  let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  const DRAG_THRESHOLD = 4;
+  acteViewerStage.addEventListener("mousedown", e=>{
+    if(e.button !== 0) return;
+    dragging = true; moved = false;
+    startX = e.clientX; startY = e.clientY;
+    startLeft = acteViewerStage.scrollLeft; startTop = acteViewerStage.scrollTop;
+  });
+  window.addEventListener("mousemove", e=>{
+    if(!dragging) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if(!moved){
+      if(Math.abs(dx)<=DRAG_THRESHOLD && Math.abs(dy)<=DRAG_THRESHOLD) return;
+      moved = true;
+      acteViewerStage.classList.add("panning");
+    }
+    acteViewerStage.scrollLeft = startLeft - dx;
+    acteViewerStage.scrollTop = startTop - dy;
+    e.preventDefault();
+  });
+  function endDrag(){
+    // un glisse qui a reellement bouge ne doit pas en plus etre interprete
+    // comme un clic sur le fond (qui fermerait la visionneuse) : le mouseup
+    // suivant un mousedown+mousemove sur la zone ne genere de toute facon
+    // pas de "click" tant que la cible reste la meme (la zone elle-meme,
+    // jamais "acteViewer"), donc rien de plus a faire ici que reinitialiser
+    // l'etat de glisse.
+    dragging = false; moved = false;
+    acteViewerStage.classList.remove("panning");
+  }
+  window.addEventListener("mouseup", endDrag);
+  window.addEventListener("blur", endDrag);
+})();
 
 function renderDetail(key){
   const p = PEOPLE[key];

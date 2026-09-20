@@ -1175,6 +1175,22 @@ function computeAxis(order, maxGen, pitch, offset){
       if(P[key]===undefined && (g===maxGen || !PARENTS[key])){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
     });
   }
+  // exception ponctuelle : Pierre Jean Marie Duros (pjmd) et Jeanne Marie
+  // Francoise Cotillard (cotillard) sont chacun-e marie-e a l'un-e des 2
+  // freres et soeurs Destouches (jmd, ljmd) -- un noeud de convergence ou le
+  // parcours recursif ci-dessus (qui suit pere puis mere depuis la racine,
+  // sans connaissance des alliances par mariage) ne peut pas, par
+  // construction, deviner l'ordre gauche-a-droite qui evite tout croisement
+  // de lignes. Rang impose manuellement pour ce seul groupe, gauche a
+  // droite : pjmd, jmd (freres et soeurs), ljmd, cotillard -- demande
+  // explicite de l'utilisateur le 2026-09-21. N'affecte que l'ordre RELATIF
+  // de ces 4 personnes entre elles ; leur position par rapport au reste de
+  // l'arbre reste celle, naturelle, du rang le plus bas parmi elles.
+  const RANK_OVERRIDE_SEQUENCE = ["pjmd","jmd","ljmd","cotillard"];
+  if(RANK_OVERRIDE_SEQUENCE.every(k=>rankOf[k]!==undefined)){
+    const baseRank = Math.min(...RANK_OVERRIDE_SEQUENCE.map(k=>rankOf[k]));
+    RANK_OVERRIDE_SEQUENCE.forEach((k,idx)=>{ rankOf[k] = baseRank + idx*0.001; });
+  }
   const rankedOrder = {};
   for(let g=0; g<=maxGen; g++){
     rankedOrder[g] = (order[g]||[]).slice().sort((a,b)=>(rankOf[a]??1e9)-(rankOf[b]??1e9));
@@ -1236,15 +1252,23 @@ function computeAxis(order, maxGen, pitch, offset){
     });
     if(units.length>1){
       // meme technique de decalage qu'une regression isotonique a ecart
-      // minimal garanti, generalisee a des unites de taille variable :
-      // chaque personne occupe un
-      // "emplacement" de largeur pitch, une unite de N freres/soeurs en
-      // occupant donc N a la suite.
-      let slot = 0;
-      const starts = units.map(u=>{ const s = slot; slot += u.keys.length; return s; });
-      const adj = units.map((u,idx)=> u.value - starts[idx]*pitch);
+      // minimal garanti, generalisee a des unites de largeur variable :
+      // une unite de N freres/soeurs occupe, une fois ecartee (ci-dessous),
+      // une largeur de (N-1)*offset autour de sa valeur centrale -- il faut
+      // donc reserver cette demi-largeur en plus du pitch minimal de
+      // chaque cote, sans quoi le membre de l'unite le plus proche du
+      // voisin peut se retrouver a moins de `pitch` de lui (chevauchement
+      // de fiches). Repere le 2026-09-21 (Jeanne Marie Destouches
+      // chevauchant Pierre Jean Marie Duros, tous deux voisins d'une unite
+      // de 2 freres et soeurs).
+      const halfSpans = units.map(u=>(u.keys.length-1)*offset/2);
+      const cumGap = [halfSpans[0]];
+      for(let idx=1; idx<units.length; idx++){
+        cumGap.push(cumGap[idx-1] + halfSpans[idx-1] + pitch + halfSpans[idx]);
+      }
+      const adj = units.map((u,idx)=> u.value - cumGap[idx]);
       const fixedAdj = isotonicRegression(adj);
-      units.forEach((u,idx)=>{ u.value = fixedAdj[idx] + starts[idx]*pitch; });
+      units.forEach((u,idx)=>{ u.value = fixedAdj[idx] + cumGap[idx]; });
     }
     units.forEach(u=>{
       const n = u.keys.length;

@@ -160,6 +160,12 @@ header.masthead .sub b{ color:var(--ink); font-weight:600; }
 .chart-shell::-webkit-scrollbar-track{ background:transparent; }
 .chart-shell::-webkit-scrollbar-thumb{ background:var(--rule); border-radius:5px; }
 .chart-shell::-webkit-scrollbar-thumb:hover{ background:var(--ink-faint); }
+/* clic-glisse sur le fond pour se deplacer dans l'arbre (cf. initPanDrag) :
+   curseur "main ouverte" au survol, "main fermee" pendant le glisse-deplace
+   lui-meme ; la selection de texte est desactivee pendant le glisse pour
+   eviter de surligner du texte en deplacant la souris. */
+.chart-shell{ cursor:grab; }
+.chart-shell.panning{ cursor:grabbing; user-select:none; }
 .chart{ position:relative; margin:0 auto; }
 
 .gen-headers{ position:absolute; top:0; left:0; height:2.6rem; z-index:20; }
@@ -2374,6 +2380,53 @@ function updateGenHeadersLock(){
 window.addEventListener("scroll", updateGenHeadersLock, {passive:true});
 window.addEventListener("resize", updateGenHeadersLock);
 chartShellEl.addEventListener("scroll", updateGenHeadersLock, {passive:true});
+
+// ---------- Deplacement dans l'arbre par clic-glisse (fond clair de
+// chart-shell) ----------
+// Un clic gauche MAINTENU sur le fond (pas sur une fiche, un en-tete de
+// generation ou le bouton de fratrie) permet de se deplacer dans l'arbre en
+// glissant, plutot que de devoir viser les barres de defilement. Le
+// defilement horizontal passe par chart-shell.scrollLeft (le seul
+// conteneur qui defile reellement dans cet axe, cf. sa regle CSS) ; le
+// vertical par la page elle-meme (chart-shell n'a pas de hauteur fixee,
+// donc ne defile jamais lui-meme verticalement).
+(function initPanDrag(){
+  let dragging = false, moved = false;
+  let startX = 0, startY = 0, startScrollLeft = 0, startScrollTop = 0;
+  const DRAG_THRESHOLD = 4; // en-deca, un simple clic (ex. sur le fond pour fermer un menu) reste un clic
+  function isInteractive(el){
+    return !!el.closest(".node, .gen-header, .sib-toggle, button, a");
+  }
+  chartShellEl.addEventListener("mousedown", e=>{
+    if(e.button !== 0) return; // clic gauche uniquement — le droit reste reserve au menu contextuel
+    if(isInteractive(e.target)) return;
+    dragging = true; moved = false;
+    startX = e.clientX; startY = e.clientY;
+    startScrollLeft = chartShellEl.scrollLeft;
+    startScrollTop = window.scrollY;
+  });
+  window.addEventListener("mousemove", e=>{
+    if(!dragging) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if(!moved){
+      if(Math.abs(dx)<=DRAG_THRESHOLD && Math.abs(dy)<=DRAG_THRESHOLD) return;
+      moved = true;
+      chartShellEl.classList.add("panning");
+    }
+    chartShellEl.scrollLeft = startScrollLeft - dx;
+    window.scrollTo(window.scrollX, startScrollTop - dy);
+    e.preventDefault();
+  });
+  function endDrag(){
+    dragging = false; moved = false;
+    chartShellEl.classList.remove("panning");
+  }
+  window.addEventListener("mouseup", endDrag);
+  // annule un glisse en cours si le bouton est relache hors de la fenetre
+  // (le mouseup correspondant n'est alors jamais recu) : sans ca, `dragging`
+  // resterait bloque a `true` et un simple survol relancerait le defilement.
+  window.addEventListener("blur", endDrag);
+})();
 
 let currentRoot = null, currentOrder = null, currentDepthOf = null, currentMaxGen = 0, currentTags = null;
 let currentY = null, currentBranch = null, currentMaxY = 0;

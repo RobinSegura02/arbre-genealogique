@@ -1156,7 +1156,8 @@ function computeAxis(order, maxGen, pitch, offset){
   function adjustLeafSpouses(){
     let changed = false;
     for(let g=0; g<=maxGen; g++){
-      (order[g]||[]).forEach(key=>{
+      const seq = order[g]||[];
+      seq.forEach((key,idx)=>{
         if(PARENTS[key]) return;
         const sp = SPOUSE_OF[key];
         if(!sp || P[sp.spouse]===undefined) return;
@@ -1169,7 +1170,20 @@ function computeAxis(order, maxGen, pitch, offset){
         // d'origine. On ne rapproche donc que vers un-e conjoint-e qui, elle,
         // continue reellement plus loin.
         if(!PARENTS[sp.spouse]) return;
-        const np = P[sp.spouse] + pitch;
+        // du meme cote que dans order[g] (toujours +pitch auparavant, quel
+        // que soit l'ordre reel) : sinon, quand la feuille precede son ou sa
+        // conjoint-e dans la sequence (ex. Manuel Segura avant Genevieve
+        // Destouches), la placer systematiquement APRES viole l'ordre
+        // attendu — la regression isotonique "corrige" alors cette violation
+        // en deplacant a tort le/la conjoint-e non-feuille lui/elle-meme
+        // (qui a pourtant deja sa propre position correcte, moyenne exacte
+        // de SES parents), le decentrant de ses propres parents et, en
+        // cascade, decentrant aussi leurs enfants de ce couple. Repere le
+        // 2026-09-20 (Pascal Segura decentre de Manuel/Genevieve, qui etait
+        // elle-meme decentree de ses propres parents).
+        const spIdx = seq.indexOf(sp.spouse);
+        const sign = idx < spIdx ? -1 : 1;
+        const np = P[sp.spouse] + sign*pitch;
         if(P[key]!==np){ P[key] = np; changed = true; }
       });
     }
@@ -1223,6 +1237,25 @@ function computeAxis(order, maxGen, pitch, offset){
       if(par && P[par.father]!==undefined && P[par.mother]!==undefined){
         P[key] = (P[par.father] + P[par.mother]) / 2;
       }
+    });
+    // resynchronise chaque conjoint-e sans ascendance connue sur la valeur
+    // FRAICHEMENT recalculee ci-dessus de son ou sa conjoint-e, avant de
+    // figer cette generation — sans quoi la feuille reste calee sur
+    // l'ancienne valeur d'avant la correction des generations plus
+    // profondes (la convergence adjustLeafSpouses precedente ayant eu lieu
+    // sur des valeurs pas encore finalisees) : figer la generation la
+    // "corrigeait" alors a tort en deplacant le/la conjoint-e non-feuille
+    // lui/elle-meme, decentrant du meme coup ses propres enfants. Repere le
+    // 2026-09-20 (Pascal Segura reste decentre de Manuel/Genevieve malgre
+    // Genevieve elle-meme desormais correctement centree sur ses parents).
+    const seq = order[g]||[];
+    seq.forEach((key,idx)=>{
+      if(PARENTS[key]) return;
+      const sp = SPOUSE_OF[key];
+      if(!sp || P[sp.spouse]===undefined || !PARENTS[sp.spouse]) return;
+      const spIdx = seq.indexOf(sp.spouse);
+      const sign = idx<spIdx ? -1 : 1;
+      P[key] = P[sp.spouse] + sign*pitch;
     });
     finalizeGen(g);
   }

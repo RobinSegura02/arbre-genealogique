@@ -1501,16 +1501,32 @@ function applyGenVisibility(){
   headersEl.style.height = isV ? "0px" : "2.6rem";
 
   const sibPitch = isV ? SIB_PITCH_V : ROW_PITCH;
+  // S (position de chaque personne le long de l'axe des freres et soeurs) est
+  // calcule sur currentMaxGen — la profondeur REELLE des donnees — et non sur
+  // visibleMaxGen — la profondeur actuellement AFFICHEE. Sans cette
+  // distinction, replier/deplier une generation change l'ensemble des
+  // "feuilles" que computeAxis ancre au depart (cf. son propre commentaire :
+  // g===maxGen est traite comme une feuille) : afficher une generation de
+  // plus faisait alors basculer les generations deja visibles d'un ancrage
+  // "position arbitraire de feuille" a un ancrage "moyenne de ses vrais
+  // parents", deplacant du coup TOUTES les fiches deja affichees — pas
+  // seulement celles de la nouvelle generation. En fixant l'ancrage sur
+  // currentMaxGen, la position de chaque personne ne depend plus que des
+  // donnees, jamais de l'etat de repli/depli courant : agrandir ou reduire
+  // la profondeur affichee ne fait plus que montrer/cacher des fiches deja
+  // positionnees, sans jamais deplacer celles qui restent visibles. Repere
+  // le 2026-09-20 (capture ecran utilisateur : comparaison generation VIII
+  // vs IX affichee, meme arbre, tout le reste du placement change).
   let genPitch, S;
   if(isV){
     // moitie de l'ecart entre colonnes en horizontal (CARD_W+colGapFor) : le
     // meme pas complet, essaye tel quel, rendait la pile de generations trop
     // aeree a la verticale.
     genPitch = (CARD_W + colGapFor(visibleMaxGen)) / 2;
-    S = computeAxis(currentOrder, visibleMaxGen, SIB_PITCH_V, SIB_OFFSET_V);
+    S = computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V);
   } else {
     genPitch = CARD_W + colGapFor(visibleMaxGen);
-    S = computeAxis(currentOrder, visibleMaxGen, ROW_PITCH, SIBLING_OFFSET);
+    S = computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET);
   }
 
   // bande reservee en haut (mode vertical) pour les etiquettes des generations

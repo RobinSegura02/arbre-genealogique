@@ -790,6 +790,14 @@ const CARD_H = 96; // hauteur type d'une fiche (nom + profession + 2 dates) ; le
 const COL_GAP_MAX = 190;  // ecart entre colonnes quand toutes les generations de l'arbre sont affichees — large (cf. session 2026-09-17) pour laisser aux longs traits (couples dont les 2 ascendances ont un poids tres different) la place de se dessiner sans chevaucher les fiches voisines
 const COL_GAP_MIN = 20;  // ecart minimal quand on a replie jusqu'a n'en laisser que 2 (jamais colle)
 const ROW_PITCH = 142; // > hauteur reelle max observee (~117px) pour garantir un vrai espace entre les fiches
+// NB (2026-09-20) : releve un temps a 190 pour tenter de reduire les
+// ecarts de centrage residuels (cf. finalizeGen/isotonicRegressionMinGap)
+// -- mesure sans effet et abandonnee : la regression isotonique ne
+// decide de fusionner 2 personnes que d'apres l'ORDRE de leurs positions
+// brutes, jamais d'apres l'ECART entre elles ; ce calcul est lineaire en
+// `pitch`, donc l'agrandir met juste TOUTES les positions a l'echelle
+// (violations identiques, ecarts residuels proportionnellement plus
+// grands) sans jamais changer quelles personnes sont fusionnees.
 const SIBLING_OFFSET = 142; // ecart applique quand deux personnes partagent les 2 memes parents (> CARD_H pour eviter tout chevauchement)
 const TOP_PAD = 8;
 const LEFT_PAD = 4;
@@ -1004,6 +1012,50 @@ function computeAxis(order, maxGen, pitch, offset){
       if(g===maxGen || !PARENTS[key]){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
     });
   }
+
+  function isotonicRegression(values){
+    const blocks = [];
+    for(const v of values){
+      let block = {avg:v, weight:1, size:1};
+      blocks.push(block);
+      while(blocks.length>1 && blocks[blocks.length-2].avg > blocks[blocks.length-1].avg){
+        const b2 = blocks.pop(), b1 = blocks.pop();
+        blocks.push({
+          avg: (b1.avg*b1.weight + b2.avg*b2.weight) / (b1.weight+b2.weight),
+          weight: b1.weight+b2.weight,
+          size: b1.size+b2.size
+        });
+      }
+    }
+    const out = [];
+    blocks.forEach(b=>{ for(let k=0;k<b.size;k++) out.push(b.avg); });
+    return out;
+  }
+  function isotonicRegressionMinGap(values, minGap){
+    const shifted = values.map((v,i)=>v - i*minGap);
+    const fixed = isotonicRegression(shifted);
+    return fixed.map((v,i)=>v + i*minGap);
+  }
+  function finalizeGen(g){
+    const byParents = {};
+    order[g].forEach(key=>{
+      const par = PARENTS[key];
+      if(!par) return;
+      const pk = par.father+"|"+par.mother;
+      (byParents[pk] = byParents[pk] || []).push(key);
+    });
+    Object.values(byParents).forEach(keys=>{
+      if(keys.length<2) return;
+      const base = P[keys[0]];
+      const n = keys.length;
+      keys.forEach((key,i)=>{ P[key] = base + (i - (n-1)/2) * offset; });
+    });
+    const seq = order[g].filter(key=>P[key]!==undefined);
+    if(seq.length<2) return;
+    const fixed = isotonicRegressionMinGap(seq.map(key=>P[key]), pitch);
+    seq.forEach((key,i)=>{ P[key] = fixed[i]; });
+  }
+
   function averagingPass(){
     for(let g=maxGen-1; g>=0; g--){
       order[g].forEach(key=>{
@@ -1073,83 +1125,46 @@ function computeAxis(order, maxGen, pitch, offset){
     averagingPass();
   }
 
-  // deux personnes qui partagent exactement les 2 memes parents (freres/soeurs
-  // retenus dans l'arbre) tombent naturellement sur le meme point : on les
-  // ecarte symetriquement pour qu'elles restent lisibles cote a cote.
+  // ---------- ordre naturel preserve + recentrage des enfants (une fois
+  // les conjoint-s sans ascendance connue definitivement stabilises
+  // ci-dessus) ----------
+  // order[g] range deja chaque union pere+mere cote a cote (cf. buildOrder,
+  // qui pousse `next.push(f, m)` pour chaque couple rencontre) : c'est
+  // l'ordre "naturel" de l'arbre. Mais P[key], lui, vient d'une moyenne
+  // recursive des ascendants qui ignore cet ordre : rien n'empeche la
+  // moyenne d'une personne totalement etrangere a un couple de tomber,
+  // numeriquement, entre les deux (arrive des que les 2 conjoint-s ont des
+  // ascendances de poids tres different). Corrige via une regression
+  // isotonique (Pool Adjacent Violators, ecart minimal garanti) qui force
+  // P a rester croissant dans l'ordre de order[g] -- un couple etant
+  // toujours adjacent dans cet ordre, plus aucune fiche etrangere ne peut
+  // s'intercaler entre les deux. Repere le 2026-09-20 (capture ecran
+  // utilisateur : Louis Francois Des Touches / Marie Joseph Le Borgne,
+  // separes par une fiche sans lien avec eux).
+  //
+  // Fait dans une passe SEPAREE, APRES la convergence des conjoint-s
+  // sans ascendance ci-dessus (pas mêlée a averagingPass) : sinon un-e
+  // conjoint-e encore mal place-e (ex. Manuel Segura, sans ascendance
+  // connue, pas encore cale sur Genevieve) declenche une correction
+  // d'ordre qui deplace a tort Genevieve elle-meme -- alors que quelques
+  // lignes plus loin, la convergence normale l'aurait de toute facon
+  // recale pres d'elle sans qu'aucune correction ne soit necessaire.
+  // Repere le 2026-09-20 (demande utilisateur : recentrer les enfants sur
+  // leurs parents, Genevieve deplacee par erreur au premier essai).
+  // Traite les generations de la plus profonde a la plus proche de la
+  // racine, en recalculant chaque niveau a partir du niveau precedent
+  // (deja corrige) avant de passer au suivant : un enfant reste ainsi
+  // centre sur la position FINALE (post-correction) de ses parents,
+  // jamais sur leur position brute d'avant correction.
+  finalizeGen(maxGen);
   for(let g=maxGen-1; g>=0; g--){
-    const byParents = {};
     order[g].forEach(key=>{
       const par = PARENTS[key];
-      if(!par) return;
-      const pk = par.father+"|"+par.mother;
-      (byParents[pk] = byParents[pk] || []).push(key);
-    });
-    Object.values(byParents).forEach(keys=>{
-      if(keys.length<2) return;
-      const base = P[keys[0]];
-      const n = keys.length;
-      keys.forEach((key,i)=>{ P[key] = base + (i - (n-1)/2) * offset; });
-    });
-  }
-
-  // ---------- ordre naturel prÃ©servÃ© (aucune fiche "Ã©trangÃ¨re" entre 2
-  // conjoint-s ou 2 frÃ¨res/soeurs) ----------
-  // order[g] range dÃ©jÃ  chaque union pÃ¨re+mÃ¨re cÃ´te Ã  cÃ´te (cf. buildOrder,
-  // qui pousse `next.push(f, m)` pour chaque couple rencontrÃ©) : c'est
-  // l'ordre "naturel" de l'arbre, et il ne change jamais. Mais P[key], lui,
-  // vient d'une moyenne rÃ©cursive des ascendants (cf. averagingPass) qui
-  // ignore cet ordre : rien n'empÃªche la moyenne d'une personne TOTALEMENT
-  // Ã©trangÃ¨re Ã  ce couple de tomber, numÃ©riquement, entre les deux (arrive
-  // dÃ¨s que les 2 conjoint-s ont des ascendances de poids trÃ¨s diffÃ©rent,
-  // cf. le commentaire plus haut sur lfdt/mjlb) â€” la fiche Ã©trangÃ¨re
-  // s'affiche alors visuellement coincÃ©e entre les 2 conjoint-s, quand bien
-  // mÃªme aucun trait ne la traverse littÃ©ralement.
-  // On force donc P Ã  rester CROISSANT dans l'ordre de order[g] via une
-  // rÃ©gression isotonique (Pool Adjacent Violators Algorithm) : chaque
-  // violation (une valeur plus petite que la prÃ©cÃ©dente dans l'ordre) est
-  // fusionnÃ©e avec son bloc voisin en une moyenne pondÃ©rÃ©e, jusqu'Ã  ce que
-  // la sÃ©quence entiÃ¨re soit non dÃ©croissante â€” l'ajustement le plus proche
-  // possible des positions calculÃ©es qui respecte malgrÃ© tout l'ordre
-  // d'origine. Un couple Ã©tant toujours adjacent dans order[g], le
-  // respect de cet ordre garantit mÃ©caniquement qu'aucune fiche
-  // Ã©trangÃ¨re ne peut plus s'intercaler entre les deux. Repere le
-  // 2026-09-20 (capture ecran utilisateur : Louis FranÃ§ois Des Touches /
-  // Marie Joseph Le Borgne, sÃ©parÃ©s par une fiche sans lien avec eux).
-  function isotonicRegression(values){
-    const blocks = []; // {avg, weight, size}
-    for(const v of values){
-      let block = {avg:v, weight:1, size:1};
-      blocks.push(block);
-      while(blocks.length>1 && blocks[blocks.length-2].avg > blocks[blocks.length-1].avg){
-        const b2 = blocks.pop(), b1 = blocks.pop();
-        blocks.push({
-          avg: (b1.avg*b1.weight + b2.avg*b2.weight) / (b1.weight+b2.weight),
-          weight: b1.weight+b2.weight,
-          size: b1.size+b2.size
-        });
+      if(par && P[par.father]!==undefined && P[par.mother]!==undefined){
+        P[key] = (P[par.father] + P[par.mother]) / 2;
       }
-    }
-    const out = [];
-    blocks.forEach(b=>{ for(let k=0;k<b.size;k++) out.push(b.avg); });
-    return out;
-  }
-  // variante avec ECART MINIMAL garanti entre 2 personnes consecutives
-  // (pas seulement "non decroissant") : sans ca, une regression isotonique
-  // "nue" peut resoudre une violation en fusionnant 2+ personnes a la MEME
-  // valeur exacte (ex. un couple ramene pile au meme point) — chevauchement
-  // pur et simple de leurs fiches. Technique standard : on retire i*minGap
-  // avant la regression (rendant "juste non decroissant" equivalent a
-  // "espace d'au moins minGap"), puis on le rajoute apres.
-  function isotonicRegressionMinGap(values, minGap){
-    const shifted = values.map((v,i)=>v - i*minGap);
-    const fixed = isotonicRegression(shifted);
-    return fixed.map((v,i)=>v + i*minGap);
-  }
-  for(let g=0; g<=maxGen; g++){
-    const seq = (order[g]||[]).filter(key=>P[key]!==undefined);
-    if(seq.length<2) continue;
-    const fixed = isotonicRegressionMinGap(seq.map(key=>P[key]), pitch);
-    seq.forEach((key,i)=>{ P[key] = fixed[i]; });
+    });
+    finalizeGen(g);
   }
 
   return P;

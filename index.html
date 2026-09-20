@@ -790,14 +790,6 @@ const CARD_H = 96; // hauteur type d'une fiche (nom + profession + 2 dates) ; le
 const COL_GAP_MAX = 190;  // ecart entre colonnes quand toutes les generations de l'arbre sont affichees — large (cf. session 2026-09-17) pour laisser aux longs traits (couples dont les 2 ascendances ont un poids tres different) la place de se dessiner sans chevaucher les fiches voisines
 const COL_GAP_MIN = 20;  // ecart minimal quand on a replie jusqu'a n'en laisser que 2 (jamais colle)
 const ROW_PITCH = 142; // > hauteur reelle max observee (~117px) pour garantir un vrai espace entre les fiches
-// NB (2026-09-20) : releve un temps a 190 pour tenter de reduire les
-// ecarts de centrage residuels (cf. finalizeGen/isotonicRegressionMinGap)
-// -- mesure sans effet et abandonnee : la regression isotonique ne
-// decide de fusionner 2 personnes que d'apres l'ORDRE de leurs positions
-// brutes, jamais d'apres l'ECART entre elles ; ce calcul est lineaire en
-// `pitch`, donc l'agrandir met juste TOUTES les positions a l'echelle
-// (violations identiques, ecarts residuels proportionnellement plus
-// grands) sans jamais changer quelles personnes sont fusionnees.
 const SIBLING_OFFSET = 142; // ecart applique quand deux personnes partagent les 2 memes parents (> CARD_H pour eviter tout chevauchement)
 const TOP_PAD = 8;
 const LEFT_PAD = 4;
@@ -998,52 +990,20 @@ function buildOrder(rootKey){
 // de fiche) et pour l'axe horizontal (mode vertical, pitch=largeur de fiche).
 function computeAxis(order, maxGen, pitch, offset){
   const P = {};
-  const depthOf = {};
-  for(let g=0; g<=maxGen; g++){
-    (order[g]||[]).forEach(key=>{ depthOf[key] = g; });
-  }
-  // ancre chaque "feuille" par un PARCOURS RECURSIF EN POSTFIXE depuis la
-  // racine (pere d'abord, puis mere, recursivement) : une feuille (sans
-  // PARENTS[key] connu, ou a la limite de profondeur actuellement chargee,
-  // meme si elle a en realite des ancetres plus loin, hors de cette vue)
-  // recoit un point espace de `pitch` au moment ou on l'atteint ; toute
-  // personne intermediaire est ensuite exactement la moyenne de ses 2
-  // parents, deja positionnes puisqu'on descend jusqu'aux feuilles avant de
-  // remonter. C'est cet ordre de parcours -- qui suit la structure REELLE
-  // de l'arbre plutot qu'un simple compteur balayant les generations
-  // independamment d'elle -- qui garantit mathematiquement l'absence de
-  // croisement entre branches (2 sous-arbres traites en sequence, jamais
-  // entrelaces, ont necessairement des positions qui restent dans le meme
-  // ordre) et un tassement naturel (jamais artificiellement agrandi ni
-  // retreci). Repere le 2026-09-20 : l'ancienne version (compteur global
-  // parcourant `order[g]` generation par generation, du plus profond au
-  // plus proche de la racine, sans rapport avec la structure reelle des
-  // sous-arbres) produisait des ecarts de 213 a 1207px entre voisins d'une
-  // meme generation et des lignes de liaison traversant tout l'arbre.
+  // ancre chaque "feuille" a un point espace de `pitch`, dans l'ordre naturel
+  // de l'arbre (generation la plus profonde d'abord) : soit parce qu'elle est
+  // au niveau le plus profond actuellement affiche (maxGen, meme si cette
+  // personne a en realite des ancetres plus loin, replies hors de cette vue),
+  // soit parce qu'elle n'a vraiment aucun PARENTS[key] connu, meme a une
+  // generation moins profonde (ex. le pere d'un descendant re-centre comme
+  // racine, sans ascendance propre documentee) — sans quoi sa position reste
+  // indefinie.
   let i = 0;
-  function place(key){
-    if(P[key]!==undefined) return P[key]; // deja positionne (ancetre atteint 2 fois, ex. mariage entre cousins)
-    const par = PARENTS[key];
-    if(!par || depthOf[key]===undefined || depthOf[key]>=maxGen){
-      P[key] = TOP_PAD + i*pitch + pitch/2;
-      i++;
-      return P[key];
-    }
-    const fy = place(par.father);
-    const my = place(par.mother);
-    P[key] = (fy + my) / 2;
-    return P[key];
-  }
-  const rootKey = order[0] && order[0][0];
-  if(rootKey) place(rootKey);
-  // filet de securite : une personne presente dans `order` mais jamais
-  // atteinte par ce parcours (ne devrait pas arriver, `order` etant lui-meme
-  // construit depuis la racine via les memes liens PARENTS) reste tout de
-  // meme positionnee.
   for(let g=maxGen; g>=0; g--){
-    (order[g]||[]).forEach(key=>{ if(P[key]===undefined) place(key); });
+    (order[g]||[]).forEach(key=>{
+      if(g===maxGen || !PARENTS[key]){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
+    });
   }
-
   function averagingPass(){
     for(let g=maxGen-1; g>=0; g--){
       order[g].forEach(key=>{
@@ -1052,41 +1012,35 @@ function computeAxis(order, maxGen, pitch, offset){
           P[key] = (P[par.father] + P[par.mother]) / 2;
         }
       });
-      // deux personnes qui partagent exactement les 2 memes parents
-      // (freres/soeurs retenus dans l'arbre) tombent naturellement sur le
-      // meme point : on les ecarte symetriquement pour qu'elles restent
-      // lisibles cote a cote. Fait ICI, generation par generation juste
-      // apres la moyenne de CETTE generation (et non comme passe separee),
-      // pour que l'ecartement soit repercute sur leurs propres enfants des
-      // la meme passe.
-      const byParents = {};
-      order[g].forEach(key=>{
-        const par = PARENTS[key];
-        if(!par) return;
-        const pk = par.father+"|"+par.mother;
-        (byParents[pk] = byParents[pk] || []).push(key);
-      });
-      Object.values(byParents).forEach(keys=>{
-        if(keys.length<2) return;
-        const base = P[keys[0]];
-        const n = keys.length;
-        keys.forEach((key,i)=>{ P[key] = base + (i - (n-1)/2) * offset; });
-      });
     }
   }
-  // au moins une passe pour ecarter d'eventuels freres/soeurs places par
-  // `place()` exactement au meme point (memes 2 parents) -- sans quoi ce
-  // cas ne serait jamais traite si `adjustLeafSpouses` ci-dessous n'a rien a
-  // ajuster des le premier appel (boucle interrompue avant tout appel a
-  // `averagingPass`).
   averagingPass();
 
   // rapproche chaque "feuille" (sans PARENTS[key], donc positionnee au hasard
   // du comptage de parcours ci-dessus) de son eventuel-le conjoint-e deja
-  // positionne-e -- utile quand l'un des deux n'a pas d'ascendance connue alors
+  // positionne-e — utile quand l'un des deux n'a pas d'ascendance connue alors
   // que l'autre continue plus loin (ex. l'epoux d'une ascendante, sans lien de
   // parente documente lui-meme) : sans quoi le couple se retrouve affiche tres
   // loin l'un de l'autre.
+  //
+  // NB (session du 2026-09-17) : deux tentatives precedentes rapprochaient
+  // aussi les couples ou LES DEUX ont une ascendance connue (feuille ou pas),
+  // pour eviter le long trait "en travers du graphique" qui apparait quand
+  // les deux ascendances d'un couple ont un "poids" tres different (bien
+  // plus de monde documente d'un cote que de l'autre — frequent depuis
+  // l'ajout des generations V/VI, asymetrique). Les deux ont ete abandonnees :
+  // deplacer un couple pour le rapprocher casse alors necessairement le lien
+  // correct d'au moins l'un des deux avec SES PROPRES parents (ex. Jean
+  // Baptiste Prual, a la fois enfant de Jean Prual x Marie Dufros ET epoux
+  // de Francoise Bourdais — le rapprocher de Francoise l'eloigne de ses
+  // propres parents, d'autant que ces derniers avaient eux-memes une autre
+  // union a satisfaire). Avec des branches aussi asymetriques, AUCUN
+  // positionnement ne peut garder tous les traits courts a la fois : on
+  // privilegie donc la filiation directe (toujours exacte) plutot que la
+  // proximite visuelle des conjoint-s (parfois large), et on donne aux
+  // longs traits residuels de la place pour se dessiner proprement (cf.
+  // COL_GAP_MAX et le style ".link.long" plus bas) plutot que de tordre les
+  // positions pour les raccourcir de force.
   function adjustLeafSpouses(){
     let changed = false;
     for(let g=0; g<=maxGen; g++){
@@ -1097,7 +1051,7 @@ function computeAxis(order, maxGen, pitch, offset){
         // si le ou la conjoint-e est elle-meme une feuille (aucune ascendance
         // connue de part et d'autre, ex. deux ancetres "terminaux" maries
         // ensemble), les deux sont deja naturellement voisins via leur
-        // placement initial -- les ajuster ici les ferait se "courir apres"
+        // placement initial — les ajuster ici les ferait se "courir apres"
         // mutuellement a chaque iteration (l'un se cale sur l'autre, qui vient
         // de se caler sur lui), et deriver indefiniment loin de leur position
         // d'origine. On ne rapproche donc que vers un-e conjoint-e qui, elle,
@@ -1111,63 +1065,96 @@ function computeAxis(order, maxGen, pitch, offset){
   }
   // le rapprochement d'une feuille vers son ou sa conjoint-e peut a son tour
   // deplacer la position d'un ascendant qui en depend (ex. l'enfant du
-  // couple, lui-meme parent d'un ascendant plus proche de la racine), qui
-  // peut a son tour necessiter un nouvel ajustement d'une autre feuille plus
-  // proche de la racine, etc. : chaque iteration ne propage la correction
-  // que d'une generation a la fois, donc un nombre fixe et trop petit
-  // d'iterations ne suffit plus des que l'arbre depasse quelques
-  // generations de profondeur --
-  // repere le 2026-09-20 sur la lignee Destouches (genertions VIII/IX),
-  // ou ca laissait des enfants decentres de leurs parents de plusieurs
-  // dizaines de pixels. Borne donc le nombre d'iterations sur la profondeur
-  // reelle de l'arbre pour garantir la convergence complete.
-  for(let iter=0; iter<maxGen+2; iter++){
+  // couple, lui-meme parent d'un ascendant plus proche de la racine) : on
+  // alterne rapprochement et recalcul des moyennes jusqu'a stabilisation
+  // (quelques iterations suffisent, l'arbre reste peu profond a cet egard).
+  for(let iter=0; iter<4; iter++){
     if(!adjustLeafSpouses()) break;
     averagingPass();
   }
 
-  // ---------- filet de securite : aucune fiche etrangere "entre" 2
-  // conjoint-s ----------
-  // Le parcours recursif ci-dessus place chaque personne exactement sur la
-  // moyenne de ses parents, ce qui donne un tassement naturel et un ordre
-  // correct dans l'immense majorite des cas. Mais un couple dont les 2
-  // membres ont chacun leur PROPRE ascendance documentee, de "poids" tres
-  // different, peut malgre tout se retrouver tres eloigne l'un de l'autre
-  // sur cet axe (chacun place selon SA lignee, sans lien entre elles) --
-  // au point qu'un frere/soeur de l'un des deux (ecarte de lui par la regle
-  // ci-dessus) tombe alors visuellement "entre" les 2 conjoint-s. Repere le
-  // 2026-09-20 (Louis Jean Marie Destouches / Jeanne Marie Françoise
-  // Cotillard, separes de plus de 1500px, avec Jeanne Marie Destouches --
-  // soeur du premier -- entre les deux). Plutot que de deplacer P (ce qui
-  // decentrerait alors les enfants de la personne deplacee), on decale ici
-  // la fiche en trop dans une "voie" horizontale adjacente (jamais sur cet
-  // axe des freres et soeurs) -- meme mecanisme que pour un couple en
-  // conflit avec un autre couple.
-  const stagger = {};
-  for(let g=0; g<=maxGen; g++){
-    const seq = order[g];
-    if(!seq || seq.length<2) continue;
-    const pairs = [];
-    for(let k=0;k<seq.length;k+=2){
-      if(seq[k+1]===undefined){ pairs.push([seq[k]]); break; }
-      pairs.push([seq[k], seq[k+1]]);
-    }
-    const laneEnds = [];
-    pairs.forEach(pr=>{
-      const ys = pr.map(key=>P[key]).filter(v=>v!==undefined);
-      if(!ys.length) return;
-      const ymin = Math.min(...ys), ymax = Math.max(...ys);
-      let lane = laneEnds.findIndex(end => end <= ymin - 1);
-      if(lane===-1){ lane = laneEnds.length; laneEnds.push(ymax); }
-      else { laneEnds[lane] = ymax; }
-      pr.forEach(key=>{ stagger[key] = lane; });
+  // deux personnes qui partagent exactement les 2 memes parents (freres/soeurs
+  // retenus dans l'arbre) tombent naturellement sur le meme point : on les
+  // ecarte symetriquement pour qu'elles restent lisibles cote a cote.
+  for(let g=maxGen-1; g>=0; g--){
+    const byParents = {};
+    order[g].forEach(key=>{
+      const par = PARENTS[key];
+      if(!par) return;
+      const pk = par.father+"|"+par.mother;
+      (byParents[pk] = byParents[pk] || []).push(key);
+    });
+    Object.values(byParents).forEach(keys=>{
+      if(keys.length<2) return;
+      const base = P[keys[0]];
+      const n = keys.length;
+      keys.forEach((key,i)=>{ P[key] = base + (i - (n-1)/2) * offset; });
     });
   }
-  const maxLane = Object.values(stagger).reduce((m,v)=>Math.max(m,v), 0);
 
-  return {P, stagger, maxLane};
+  // ---------- ordre naturel prÃ©servÃ© (aucune fiche "Ã©trangÃ¨re" entre 2
+  // conjoint-s ou 2 frÃ¨res/soeurs) ----------
+  // order[g] range dÃ©jÃ  chaque union pÃ¨re+mÃ¨re cÃ´te Ã  cÃ´te (cf. buildOrder,
+  // qui pousse `next.push(f, m)` pour chaque couple rencontrÃ©) : c'est
+  // l'ordre "naturel" de l'arbre, et il ne change jamais. Mais P[key], lui,
+  // vient d'une moyenne rÃ©cursive des ascendants (cf. averagingPass) qui
+  // ignore cet ordre : rien n'empÃªche la moyenne d'une personne TOTALEMENT
+  // Ã©trangÃ¨re Ã  ce couple de tomber, numÃ©riquement, entre les deux (arrive
+  // dÃ¨s que les 2 conjoint-s ont des ascendances de poids trÃ¨s diffÃ©rent,
+  // cf. le commentaire plus haut sur lfdt/mjlb) â€” la fiche Ã©trangÃ¨re
+  // s'affiche alors visuellement coincÃ©e entre les 2 conjoint-s, quand bien
+  // mÃªme aucun trait ne la traverse littÃ©ralement.
+  // On force donc P Ã  rester CROISSANT dans l'ordre de order[g] via une
+  // rÃ©gression isotonique (Pool Adjacent Violators Algorithm) : chaque
+  // violation (une valeur plus petite que la prÃ©cÃ©dente dans l'ordre) est
+  // fusionnÃ©e avec son bloc voisin en une moyenne pondÃ©rÃ©e, jusqu'Ã  ce que
+  // la sÃ©quence entiÃ¨re soit non dÃ©croissante â€” l'ajustement le plus proche
+  // possible des positions calculÃ©es qui respecte malgrÃ© tout l'ordre
+  // d'origine. Un couple Ã©tant toujours adjacent dans order[g], le
+  // respect de cet ordre garantit mÃ©caniquement qu'aucune fiche
+  // Ã©trangÃ¨re ne peut plus s'intercaler entre les deux. Repere le
+  // 2026-09-20 (capture ecran utilisateur : Louis FranÃ§ois Des Touches /
+  // Marie Joseph Le Borgne, sÃ©parÃ©s par une fiche sans lien avec eux).
+  function isotonicRegression(values){
+    const blocks = []; // {avg, weight, size}
+    for(const v of values){
+      let block = {avg:v, weight:1, size:1};
+      blocks.push(block);
+      while(blocks.length>1 && blocks[blocks.length-2].avg > blocks[blocks.length-1].avg){
+        const b2 = blocks.pop(), b1 = blocks.pop();
+        blocks.push({
+          avg: (b1.avg*b1.weight + b2.avg*b2.weight) / (b1.weight+b2.weight),
+          weight: b1.weight+b2.weight,
+          size: b1.size+b2.size
+        });
+      }
+    }
+    const out = [];
+    blocks.forEach(b=>{ for(let k=0;k<b.size;k++) out.push(b.avg); });
+    return out;
+  }
+  // variante avec ECART MINIMAL garanti entre 2 personnes consecutives
+  // (pas seulement "non decroissant") : sans ca, une regression isotonique
+  // "nue" peut resoudre une violation en fusionnant 2+ personnes a la MEME
+  // valeur exacte (ex. un couple ramene pile au meme point) — chevauchement
+  // pur et simple de leurs fiches. Technique standard : on retire i*minGap
+  // avant la regression (rendant "juste non decroissant" equivalent a
+  // "espace d'au moins minGap"), puis on le rajoute apres.
+  function isotonicRegressionMinGap(values, minGap){
+    const shifted = values.map((v,i)=>v - i*minGap);
+    const fixed = isotonicRegression(shifted);
+    return fixed.map((v,i)=>v + i*minGap);
+  }
+  for(let g=0; g<=maxGen; g++){
+    const seq = (order[g]||[]).filter(key=>P[key]!==undefined);
+    if(seq.length<2) continue;
+    const fixed = isotonicRegressionMinGap(seq.map(key=>P[key]), pitch);
+    seq.forEach((key,i)=>{ P[key] = fixed[i]; });
+  }
+
+  return P;
 }
-function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, SIBLING_OFFSET).P; }
+function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, SIBLING_OFFSET); }
 
 // branche paternelle / maternelle relative a la racine courante (et non plus
 // figee sur Geneviève) : on remonte depuis chacun des deux parents de la
@@ -1591,31 +1578,16 @@ function applyGenVisibility(){
   // positionnees, sans jamais deplacer celles qui restent visibles. Repere
   // le 2026-09-20 (capture ecran utilisateur : comparaison generation VIII
   // vs IX affichee, meme arbre, tout le reste du placement change).
-  let genPitch, S, axisStagger, axisMaxLane;
-  ({P:S, stagger:axisStagger, maxLane:axisMaxLane} = isV
-    ? computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V)
-    : computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET));
-  // decalage sur l'axe des generations (colonnes en horizontal, rangees en
-  // vertical) pour les rares fiches que computeAxis a du ecarter dans une
-  // voie secondaire (cf. son propre commentaire) -- jamais sur l'axe des
-  // freres et soeurs (S), qui reste toujours le centrage exact sur les
-  // parents.
-  const STAGGER_GAP = 90;
-  // le pas normal entre generations (colGapFor) ne reserve la place que
-  // pour 1 voie ; une generation qui en requiert plusieurs doit elargir ce
-  // pas d'autant, sans quoi la derniere voie empiete sur la colonne de la
-  // generation suivante. axisMaxLane reste generalement 0 ou 1 avec le
-  // parcours recursif (le filet de securite ne s'active que sur de rares
-  // conflits), contrairement a l'ancienne version ou tout le placement
-  // passait par des voies.
-  const staggerPad = axisMaxLane * STAGGER_GAP;
+  let genPitch, S;
   if(isV){
     // moitie de l'ecart entre colonnes en horizontal (CARD_W+colGapFor) : le
     // meme pas complet, essaye tel quel, rendait la pile de generations trop
     // aeree a la verticale.
-    genPitch = (CARD_W + colGapFor(visibleMaxGen)) / 2 + staggerPad;
+    genPitch = (CARD_W + colGapFor(visibleMaxGen)) / 2;
+    S = computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V);
   } else {
-    genPitch = CARD_W + colGapFor(visibleMaxGen) + staggerPad;
+    genPitch = CARD_W + colGapFor(visibleMaxGen);
+    S = computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET);
   }
 
   // bande reservee en haut (mode vertical) pour les etiquettes des generations
@@ -1649,8 +1621,8 @@ function applyGenVisibility(){
   function descGenPos(L){
     return isV ? (top(currentRoot,0) + L*genPitch) : (left(currentRoot,0) - L*genPitch);
   }
-  function left(key,g){ return isV ? (S[key]+LEFT_PAD_V-CARD_W/2) : genPos(g) + (axisStagger[key]||0)*STAGGER_GAP; }
-  function top(key,g){ return isV ? genPos(g) + (axisStagger[key]||0)*STAGGER_GAP : (S[key]-CARD_H/2+HEADER_H); }
+  function left(key,g){ return isV ? (S[key]+LEFT_PAD_V-CARD_W/2) : genPos(g); }
+  function top(key,g){ return isV ? genPos(g) : (S[key]-CARD_H/2+HEADER_H); }
 
   // ---------- couples au sein d'une fratrie repliable ----------
   // quand une fratrie est ouverte ET que le maillon de sang a un-e conjoint-e

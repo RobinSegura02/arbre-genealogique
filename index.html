@@ -286,6 +286,18 @@ header.masthead .sub b{ color:var(--ink); font-weight:600; }
 .node:focus-visible{ outline:2px solid var(--brass); outline-offset:2px; }
 .node.selected{ border-color:var(--brass); border-width:1.6px; box-shadow:0 0 0 3px var(--brass-soft), var(--shadow); }
 .node.selected.converge{ border-color:var(--burgundy); box-shadow:0 0 0 3px var(--burgundy-soft), var(--shadow); }
+/* fiche "ascendance inconnue" (cf. addUnknownAncestorPlaceholders) : sans
+   contenu, pointilles, ni interactive ni coloree par sexe — ne represente
+   personne en particulier. */
+.node-placeholder{
+  cursor:default; background:transparent; border-style:dashed;
+  border-color:var(--rule); display:flex; align-items:center; justify-content:center;
+}
+.node-placeholder:hover{ transform:none; box-shadow:none; border-color:var(--rule); }
+.node-placeholder-label{
+  font-family:"Fragment Mono",monospace; font-size:.62rem; letter-spacing:.05em;
+  text-transform:uppercase; text-align:center; line-height:1.5; color:var(--ink-faint);
+}
 .hidden-gen{ display:none !important; }
 .hidden-sib{ display:none !important; }
 /* icone sur le point de jonction d'un couple ascendant ayant d'autres
@@ -851,8 +863,8 @@ const COL_GAP_MAX = 190;  // ecart entre colonnes quand toutes les generations d
 const COL_GAP_MIN = 20;  // ecart minimal quand on a replie jusqu'a n'en laisser que 2 (jamais colle)
 const ROW_PITCH = 142; // > hauteur reelle max observee (~117px) pour garantir un vrai espace entre les fiches
 // NB (2026-09-20) : releve un temps a 190 pour tenter de reduire les
-// ecarts de centrage residuels (cf. finalizeGen/isotonicRegressionMinGap)
-// -- mesure sans effet et abandonnee : la regression isotonique ne
+// ecarts de centrage residuels (cf. finalizeGen) -- mesure sans effet et
+// abandonnee : la regression isotonique ne
 // decide de fusionner 2 personnes que d'apres l'ORDRE de leurs positions
 // brutes, jamais d'apres l'ECART entre elles ; ce calcul est lineaire en
 // `pitch`, donc l'agrandir met juste TOUTES les positions a l'echelle
@@ -1048,7 +1060,38 @@ function buildOrder(rootKey){
     order[g] = next;
     next.forEach(k=>{ if(!(k in depthOf)) depthOf[k]=g; });
   }
+  addUnknownAncestorPlaceholders(order, depthOf, g);
   return {order, maxGen:g, depthOf};
+}
+
+// pour toute personne SANS ascendance connue mais qui n'est pas elle-meme au
+// bord actuel de l'arbre (derniere generation chargee) : ajoute 2 fiches
+// "parents inconnus" (pointilles, sans contenu) une generation plus loin,
+// plutot que de la laisser en cul-de-sac. Sans ca, une telle personne est
+// positionnee par le simple compteur de feuilles (cf. le commentaire de
+// computeAxis) sans rapport avec sa place reelle dans l'arbre, ce qui
+// decentre ensuite ses PROPRES enfants de leurs 2 parents (repere le
+// 2026-09-20 : plusieurs generations internes de l'arbre, pas seulement la
+// derniere, ont des ascendances non documentees de ce type). N'est PAS
+// applique a la derniere generation elle-meme (g===maxGen) : celle-ci est le
+// front de recherche actuel, pas un ancetre confirme sans descendance
+// ulterieure — lui ajouter des cases vides donnerait l'impression erronee
+// que la recherche s'arrete la definitivement.
+function addUnknownAncestorPlaceholders(order, depthOf, maxGen){
+  for(let g=0; g<maxGen; g++){
+    (order[g]||[]).forEach(key=>{
+      if(PARENTS[key]) return;
+      if(PEOPLE[key] && PEOPLE[key].isPlaceholder) return;
+      const fKey = key+"__phf", mKey = key+"__phm";
+      PARENTS[key] = {father:fKey, mother:mKey};
+      if(!PEOPLE[fKey]) PEOPLE[fKey] = {sex:"M", name:"", isPlaceholder:true};
+      if(!PEOPLE[mKey]) PEOPLE[mKey] = {sex:"F", name:"", isPlaceholder:true};
+      const ng = g+1;
+      order[ng] = order[ng] || [];
+      if(!order[ng].includes(fKey)) order[ng].push(fKey, mKey);
+      depthOf[fKey] = ng; depthOf[mKey] = ng;
+    });
+  }
 }
 
 // Position 1D generique le long de "l'axe des freres et soeurs" : la derniere
@@ -1058,19 +1101,68 @@ function buildOrder(rootKey){
 // de fiche) et pour l'axe horizontal (mode vertical, pitch=largeur de fiche).
 function computeAxis(order, maxGen, pitch, offset){
   const P = {};
-  // ancre chaque "feuille" a un point espace de `pitch`, dans l'ordre naturel
-  // de l'arbre (generation la plus profonde d'abord) : soit parce qu'elle est
-  // au niveau le plus profond actuellement affiche (maxGen, meme si cette
-  // personne a en realite des ancetres plus loin, replies hors de cette vue),
-  // soit parce qu'elle n'a vraiment aucun PARENTS[key] connu, meme a une
-  // generation moins profonde (ex. le pere d'un descendant re-centre comme
-  // racine, sans ascendance propre documentee) — sans quoi sa position reste
-  // indefinie.
+  const depthOf = {};
+  for(let g=0; g<=maxGen; g++){
+    (order[g]||[]).forEach(key=>{ depthOf[key] = g; });
+  }
+  // ancre chaque "feuille" a un point espace de `pitch` : soit parce qu'elle
+  // est au niveau le plus profond actuellement affiche (maxGen, meme si
+  // cette personne a en realite des ancetres plus loin, replies hors de
+  // cette vue), soit parce qu'elle n'a vraiment aucun PARENTS[key] connu,
+  // meme a une generation moins profonde (ex. le pere d'un descendant
+  // re-centre comme racine, sans ascendance propre documentee) — sans quoi
+  // sa position reste indefinie.
+  //
+  // L'ordre de decouverte des feuilles suit un PARCOURS RECURSIF depuis la
+  // racine (pere d'abord, puis mere), et non un simple balayage generation
+  // par generation : ce dernier decouvre TOUTES les feuilles d'une
+  // profondeur donnee avant de passer a la suivante, sans aucun rapport
+  // avec la structure reelle de l'arbre (une feuille "cousine" d'une autre
+  // peut ainsi se retrouver ancree tres loin d'elle dans ce comptage global,
+  // meme si elles sont voisines dans l'arbre). La regression isotonique
+  // plus bas doit alors "corriger" cet ancrage incoherent en deplacant des
+  // personnes qui avaient pourtant deja leur propre position correcte,
+  // decentrant leurs enfants au passage. Le parcours recursif, lui, decouvre
+  // toujours une feuille juste apres ses vraies voisines de l'arbre : rien
+  // de plus a corriger ensuite dans l'immense majorite des cas. Repere le
+  // 2026-09-20 (ecarts de plusieurs centaines a plus de 2000px observes,
+  // aggraves par l'ajout de fiches "ascendance inconnue" qui multiplie les
+  // feuilles ancrees au hasard).
   let i = 0;
+  // rang de decouverte de CHAQUE personne (pas seulement les feuilles) par
+  // ce meme parcours recursif — sert plus bas a retrier chaque order[g]
+  // (construit par ailleurs par un simple balayage generation par
+  // generation, cf. buildOrder) dans cet ordre "genealogique" avant de le
+  // donner a la regression isotonique : sans ca, celle-ci continuerait de
+  // detecter des "violations" a chaque fois que le balayage par generation
+  // et le parcours recursif ne s'accordent pas sur l'ordre relatif de 2
+  // personnes, et deplacerait alors des positions pourtant deja correctes.
+  let rank = 0;
+  const rankOf = {};
+  function visit(key){
+    if(rankOf[key]!==undefined) return; // deja visite-e (ancetre atteint 2 fois, ex. cousinage)
+    rankOf[key] = rank++;
+    const par = PARENTS[key];
+    if(!par || depthOf[key]===undefined || depthOf[key]>=maxGen){
+      if(P[key]===undefined){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
+      return;
+    }
+    visit(par.father);
+    visit(par.mother);
+  }
+  const rootKey = order[0] && order[0][0];
+  if(rootKey) visit(rootKey);
+  // filet de securite : une personne presente dans `order` mais jamais
+  // atteinte par ce parcours (ne devrait pas arriver, `order` etant lui-meme
+  // construit depuis la racine via les memes liens PARENTS).
   for(let g=maxGen; g>=0; g--){
     (order[g]||[]).forEach(key=>{
-      if(g===maxGen || !PARENTS[key]){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
+      if(P[key]===undefined && (g===maxGen || !PARENTS[key])){ P[key] = TOP_PAD + i*pitch + pitch/2; i++; }
     });
+  }
+  const rankedOrder = {};
+  for(let g=0; g<=maxGen; g++){
+    rankedOrder[g] = (order[g]||[]).slice().sort((a,b)=>(rankOf[a]??1e9)-(rankOf[b]??1e9));
   }
 
   function isotonicRegression(values){
@@ -1091,29 +1183,58 @@ function computeAxis(order, maxGen, pitch, offset){
     blocks.forEach(b=>{ for(let k=0;k<b.size;k++) out.push(b.avg); });
     return out;
   }
-  function isotonicRegressionMinGap(values, minGap){
-    const shifted = values.map((v,i)=>v - i*minGap);
-    const fixed = isotonicRegression(shifted);
-    return fixed.map((v,i)=>v + i*minGap);
-  }
   function finalizeGen(g){
+    const seq = rankedOrder[g].filter(key=>P[key]!==undefined);
+    if(seq.length===0) return;
     const byParents = {};
-    order[g].forEach(key=>{
+    seq.forEach(key=>{
       const par = PARENTS[key];
       if(!par) return;
       const pk = par.father+"|"+par.mother;
       (byParents[pk] = byParents[pk] || []).push(key);
     });
-    Object.values(byParents).forEach(keys=>{
-      if(keys.length<2) return;
-      const base = P[keys[0]];
-      const n = keys.length;
-      keys.forEach((key,i)=>{ P[key] = base + (i - (n-1)/2) * offset; });
+    // regroupe les freres/soeurs (memes 2 parents) en une seule "unite"
+    // indivisible pour la regression isotonique : 2 freres/soeurs maries
+    // chacun dans une lignee differente (ex. Jeanne Marie Destouches et son
+    // frere Louis Jean Marie) sont decouverts par le parcours recursif a des
+    // rangs tres eloignes l'un de l'autre (chacun via SA propre lignee par
+    // alliance), sans rapport avec le fait qu'ils sont freres et soeurs. En
+    // les traitant individuellement, la regression isotonique pouvait tirer
+    // l'un des deux loin de l'autre, vers la famille de son propre conjoint,
+    // sans que rien ne le retienne pres de son frere/soeur. Repere le
+    // 2026-09-20. En unite, ils se deplacent toujours ensemble ; seul
+    // l'ecart interne (ecartement symetrique ci-dessous) les distingue.
+    const seenGroup = new Set();
+    const units = [];
+    seq.forEach(key=>{
+      const par = PARENTS[key];
+      const pk = par ? par.father+"|"+par.mother : null;
+      if(pk && byParents[pk].length>1){
+        if(seenGroup.has(pk)) return;
+        seenGroup.add(pk);
+        const keys = byParents[pk];
+        const avg = keys.reduce((s,k)=>s+P[k],0)/keys.length;
+        units.push({keys, value:avg});
+      } else {
+        units.push({keys:[key], value:P[key]});
+      }
     });
-    const seq = order[g].filter(key=>P[key]!==undefined);
-    if(seq.length<2) return;
-    const fixed = isotonicRegressionMinGap(seq.map(key=>P[key]), pitch);
-    seq.forEach((key,i)=>{ P[key] = fixed[i]; });
+    if(units.length>1){
+      // meme technique de decalage qu'une regression isotonique a ecart
+      // minimal garanti, generalisee a des unites de taille variable :
+      // chaque personne occupe un
+      // "emplacement" de largeur pitch, une unite de N freres/soeurs en
+      // occupant donc N a la suite.
+      let slot = 0;
+      const starts = units.map(u=>{ const s = slot; slot += u.keys.length; return s; });
+      const adj = units.map((u,idx)=> u.value - starts[idx]*pitch);
+      const fixedAdj = isotonicRegression(adj);
+      units.forEach((u,idx)=>{ u.value = fixedAdj[idx] + starts[idx]*pitch; });
+    }
+    units.forEach(u=>{
+      const n = u.keys.length;
+      u.keys.forEach((key,i)=>{ P[key] = u.value + (i - (n-1)/2) * offset; });
+    });
   }
 
   function averagingPass(){
@@ -1156,7 +1277,7 @@ function computeAxis(order, maxGen, pitch, offset){
   function adjustLeafSpouses(){
     let changed = false;
     for(let g=0; g<=maxGen; g++){
-      const seq = order[g]||[];
+      const seq = rankedOrder[g]||[];
       seq.forEach((key,idx)=>{
         if(PARENTS[key]) return;
         const sp = SPOUSE_OF[key];
@@ -1248,7 +1369,7 @@ function computeAxis(order, maxGen, pitch, offset){
     // lui/elle-meme, decentrant du meme coup ses propres enfants. Repere le
     // 2026-09-20 (Pascal Segura reste decentre de Manuel/Genevieve malgre
     // Genevieve elle-meme desormais correctement centree sur ses parents).
-    const seq = order[g]||[];
+    const seq = rankedOrder[g]||[];
     seq.forEach((key,idx)=>{
       if(PARENTS[key]) return;
       const sp = SPOUSE_OF[key];
@@ -1260,9 +1381,42 @@ function computeAxis(order, maxGen, pitch, offset){
     finalizeGen(g);
   }
 
-  return P;
+  // ---------- filet de securite : aucune fiche etrangere "entre" 2
+  // conjoint-s ----------
+  // Traiter les freres/soeurs en unite indivisible (ci-dessus) elimine
+  // l'immense majorite des cas, mais un couple dont les 2 membres ont
+  // chacun leur PROPRE ascendance de poids tres different (ex. mariage
+  // entre cousins) peut malgre tout rester tres eloigne l'un de l'autre :
+  // le frere/soeur de l'un des deux, ecarte de lui par l'ecartement
+  // symetrique, retombe alors visuellement "entre" les 2 conjoint-s.
+  // Plutot que de deplacer P (ce qui decentrerait les enfants de qui que ce
+  // soit ainsi deplace-e), decale ici la fiche en trop dans une "voie"
+  // horizontale adjacente (jamais sur cet axe des freres et soeurs).
+  const stagger = {};
+  for(let g=0; g<=maxGen; g++){
+    const seq = order[g];
+    if(!seq || seq.length<2) continue;
+    const pairs = [];
+    for(let k=0;k<seq.length;k+=2){
+      if(seq[k+1]===undefined){ pairs.push([seq[k]]); break; }
+      pairs.push([seq[k], seq[k+1]]);
+    }
+    const laneEnds = [];
+    pairs.forEach(pr=>{
+      const ys = pr.map(key=>P[key]).filter(v=>v!==undefined);
+      if(!ys.length) return;
+      const ymin = Math.min(...ys), ymax = Math.max(...ys);
+      let lane = laneEnds.findIndex(end => end <= ymin - 1);
+      if(lane===-1){ lane = laneEnds.length; laneEnds.push(ymax); }
+      else { laneEnds[lane] = ymax; }
+      pr.forEach(key=>{ stagger[key] = lane; });
+    });
+  }
+  const maxLane = Object.values(stagger).reduce((m,v)=>Math.max(m,v), 0);
+
+  return {P, stagger, maxLane};
 }
-function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, SIBLING_OFFSET); }
+function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, SIBLING_OFFSET).P; }
 
 // branche paternelle / maternelle relative a la racine courante (et non plus
 // figee sur Geneviève) : on remonte depuis chacun des deux parents de la
@@ -1779,16 +1933,29 @@ function applyGenVisibility(){
   // positionnees, sans jamais deplacer celles qui restent visibles. Repere
   // le 2026-09-20 (capture ecran utilisateur : comparaison generation VIII
   // vs IX affichee, meme arbre, tout le reste du placement change).
-  let genPitch, S;
+  let genPitch, S, axisStagger, axisMaxLane;
+  ({P:S, stagger:axisStagger, maxLane:axisMaxLane} = isV
+    ? computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V)
+    : computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET));
+  // decalage sur l'axe des generations (colonnes en horizontal, rangees en
+  // vertical) pour les rares fiches que computeAxis a du ecarter dans une
+  // voie secondaire (cf. son propre commentaire) -- jamais sur l'axe des
+  // freres et soeurs (S), qui reste toujours le centrage exact sur les
+  // parents.
+  const STAGGER_GAP = 90;
+  // le pas normal entre generations (colGapFor) ne reserve la place que
+  // pour 1 voie ; une generation qui en requiert plusieurs doit elargir ce
+  // pas d'autant, sans quoi la derniere voie empiete sur la colonne de la
+  // generation suivante. axisMaxLane reste generalement 0 ou 1 (le filet de
+  // securite ne s'active que sur de rares conflits).
+  const staggerPad = axisMaxLane * STAGGER_GAP;
   if(isV){
     // moitie de l'ecart entre colonnes en horizontal (CARD_W+colGapFor) : le
     // meme pas complet, essaye tel quel, rendait la pile de generations trop
     // aeree a la verticale.
-    genPitch = (CARD_W + colGapFor(visibleMaxGen)) / 2;
-    S = computeAxis(currentOrder, currentMaxGen, SIB_PITCH_V, SIB_OFFSET_V);
+    genPitch = (CARD_W + colGapFor(visibleMaxGen)) / 2 + staggerPad;
   } else {
-    genPitch = CARD_W + colGapFor(visibleMaxGen);
-    S = computeAxis(currentOrder, currentMaxGen, ROW_PITCH, SIBLING_OFFSET);
+    genPitch = CARD_W + colGapFor(visibleMaxGen) + staggerPad;
   }
 
   // bande reservee en haut (mode vertical) pour les etiquettes des generations
@@ -1822,8 +1989,8 @@ function applyGenVisibility(){
   function descGenPos(L){
     return isV ? (top(currentRoot,0) + L*genPitch) : (left(currentRoot,0) - L*genPitch);
   }
-  function left(key,g){ return isV ? (S[key]+LEFT_PAD_V-CARD_W/2) : genPos(g); }
-  function top(key,g){ return isV ? genPos(g) : (S[key]-CARD_H/2+HEADER_H); }
+  function left(key,g){ return isV ? (S[key]+LEFT_PAD_V-CARD_W/2) : genPos(g) + (axisStagger[key]||0)*STAGGER_GAP; }
+  function top(key,g){ return isV ? genPos(g) + (axisStagger[key]||0)*STAGGER_GAP : (S[key]-CARD_H/2+HEADER_H); }
 
   // ---------- couples au sein d'une fratrie repliable ----------
   // quand une fratrie est ouverte ET que le maillon de sang a un-e conjoint-e
@@ -2621,8 +2788,20 @@ let genAxisEl = null; // trait reliant les chiffres romains du sommaire generati
 // descendance directe du root.
 function makeNodeEl(key, opts){
   const p = PEOPLE[key];
-  const {given, surname} = splitName(p.name);
   const el = document.createElement("div");
+  if(p.isPlaceholder){
+    // fiche "ascendance inconnue" (cf. addUnknownAncestorPlaceholders) :
+    // pointilles, sans contenu, non cliquable — il n'y a litteralement rien
+    // a afficher ni a ouvrir pour une personne qu'on ne connait pas.
+    el.className = "node node-placeholder" + (opts.extraClass||"");
+    el.style.width = CARD_W+"px";
+    el.style.minHeight = CARD_H+"px";
+    el.dataset.key = key;
+    el.dataset.gen = opts.gen;
+    el.innerHTML = `<span class="node-placeholder-label">Ascendance<br>inconnue</span>`;
+    return el;
+  }
+  const {given, surname} = splitName(p.name);
   el.className = "node" + (opts.extraClass||"") + (p.sex==="M"?" male":" female");
   el.style.width = CARD_W+"px";
   el.style.minHeight = CARD_H+"px";
@@ -2790,7 +2969,10 @@ function renderTree(rootKey){
     currentDescKeys.add(key);
   });
 
-  const n = Object.keys(depthOf).length;
+  // exclut les fiches "ascendance inconnue" (cf. addUnknownAncestorPlaceholders) :
+  // ce ne sont pas des personnes documentees, les compter donnerait un total
+  // trompeur.
+  const n = Object.keys(depthOf).filter(k=>!(PEOPLE[k] && PEOPLE[k].isPlaceholder)).length;
   const rootName = displayName(rootKey);
   document.getElementById("chartFootnote").textContent = maxGen===0
     ? `${rootName} — aucun ascendant documenté au-delà dans cet arbre.`

@@ -1091,6 +1091,67 @@ function computeAxis(order, maxGen, pitch, offset){
       keys.forEach((key,i)=>{ P[key] = base + (i - (n-1)/2) * offset; });
     });
   }
+
+  // ---------- ordre naturel prÃ©servÃ© (aucune fiche "Ã©trangÃ¨re" entre 2
+  // conjoint-s ou 2 frÃ¨res/soeurs) ----------
+  // order[g] range dÃ©jÃ  chaque union pÃ¨re+mÃ¨re cÃ´te Ã  cÃ´te (cf. buildOrder,
+  // qui pousse `next.push(f, m)` pour chaque couple rencontrÃ©) : c'est
+  // l'ordre "naturel" de l'arbre, et il ne change jamais. Mais P[key], lui,
+  // vient d'une moyenne rÃ©cursive des ascendants (cf. averagingPass) qui
+  // ignore cet ordre : rien n'empÃªche la moyenne d'une personne TOTALEMENT
+  // Ã©trangÃ¨re Ã  ce couple de tomber, numÃ©riquement, entre les deux (arrive
+  // dÃ¨s que les 2 conjoint-s ont des ascendances de poids trÃ¨s diffÃ©rent,
+  // cf. le commentaire plus haut sur lfdt/mjlb) â€” la fiche Ã©trangÃ¨re
+  // s'affiche alors visuellement coincÃ©e entre les 2 conjoint-s, quand bien
+  // mÃªme aucun trait ne la traverse littÃ©ralement.
+  // On force donc P Ã  rester CROISSANT dans l'ordre de order[g] via une
+  // rÃ©gression isotonique (Pool Adjacent Violators Algorithm) : chaque
+  // violation (une valeur plus petite que la prÃ©cÃ©dente dans l'ordre) est
+  // fusionnÃ©e avec son bloc voisin en une moyenne pondÃ©rÃ©e, jusqu'Ã  ce que
+  // la sÃ©quence entiÃ¨re soit non dÃ©croissante â€” l'ajustement le plus proche
+  // possible des positions calculÃ©es qui respecte malgrÃ© tout l'ordre
+  // d'origine. Un couple Ã©tant toujours adjacent dans order[g], le
+  // respect de cet ordre garantit mÃ©caniquement qu'aucune fiche
+  // Ã©trangÃ¨re ne peut plus s'intercaler entre les deux. Repere le
+  // 2026-09-20 (capture ecran utilisateur : Louis FranÃ§ois Des Touches /
+  // Marie Joseph Le Borgne, sÃ©parÃ©s par une fiche sans lien avec eux).
+  function isotonicRegression(values){
+    const blocks = []; // {avg, weight, size}
+    for(const v of values){
+      let block = {avg:v, weight:1, size:1};
+      blocks.push(block);
+      while(blocks.length>1 && blocks[blocks.length-2].avg > blocks[blocks.length-1].avg){
+        const b2 = blocks.pop(), b1 = blocks.pop();
+        blocks.push({
+          avg: (b1.avg*b1.weight + b2.avg*b2.weight) / (b1.weight+b2.weight),
+          weight: b1.weight+b2.weight,
+          size: b1.size+b2.size
+        });
+      }
+    }
+    const out = [];
+    blocks.forEach(b=>{ for(let k=0;k<b.size;k++) out.push(b.avg); });
+    return out;
+  }
+  // variante avec ECART MINIMAL garanti entre 2 personnes consecutives
+  // (pas seulement "non decroissant") : sans ca, une regression isotonique
+  // "nue" peut resoudre une violation en fusionnant 2+ personnes a la MEME
+  // valeur exacte (ex. un couple ramene pile au meme point) — chevauchement
+  // pur et simple de leurs fiches. Technique standard : on retire i*minGap
+  // avant la regression (rendant "juste non decroissant" equivalent a
+  // "espace d'au moins minGap"), puis on le rajoute apres.
+  function isotonicRegressionMinGap(values, minGap){
+    const shifted = values.map((v,i)=>v - i*minGap);
+    const fixed = isotonicRegression(shifted);
+    return fixed.map((v,i)=>v + i*minGap);
+  }
+  for(let g=0; g<=maxGen; g++){
+    const seq = (order[g]||[]).filter(key=>P[key]!==undefined);
+    if(seq.length<2) continue;
+    const fixed = isotonicRegressionMinGap(seq.map(key=>P[key]), pitch);
+    seq.forEach((key,i)=>{ P[key] = fixed[i]; });
+  }
+
   return P;
 }
 function computeY(order, maxGen){ return computeAxis(order, maxGen, ROW_PITCH, SIBLING_OFFSET); }

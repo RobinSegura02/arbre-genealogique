@@ -1182,11 +1182,12 @@ function computeAxis(order, maxGen, pitch, offset){
   // sans connaissance des alliances par mariage) ne peut pas, par
   // construction, deviner l'ordre gauche-a-droite qui evite tout croisement
   // de lignes. Rang impose manuellement pour ce seul groupe, gauche a
-  // droite : pjmd, jmd (freres et soeurs), ljmd, cotillard -- demande
-  // explicite de l'utilisateur le 2026-09-21. N'affecte que l'ordre RELATIF
+  // droite : cotillard, ljmd (son mari), jmd (soeur de ljmd), pjmd (mari de
+  // jmd) -- demande explicite de l'utilisateur le 2026-09-21 (corrige
+  // l'ordre inverse essaye une premiere fois). N'affecte que l'ordre RELATIF
   // de ces 4 personnes entre elles ; leur position par rapport au reste de
   // l'arbre reste celle, naturelle, du rang le plus bas parmi elles.
-  const RANK_OVERRIDE_SEQUENCE = ["pjmd","jmd","ljmd","cotillard"];
+  const RANK_OVERRIDE_SEQUENCE = ["cotillard","ljmd","jmd","pjmd"];
   if(RANK_OVERRIDE_SEQUENCE.every(k=>rankOf[k]!==undefined)){
     const baseRank = Math.min(...RANK_OVERRIDE_SEQUENCE.map(k=>rankOf[k]));
     RANK_OVERRIDE_SEQUENCE.forEach((k,idx)=>{ rankOf[k] = baseRank + idx*0.001; });
@@ -1418,6 +1419,23 @@ function computeAxis(order, maxGen, pitch, offset){
       P[key] = P[sp.spouse] + sign*pitch;
     });
     finalizeGen(g);
+  }
+
+  // l'exception d'ordre ci-dessus (RANK_OVERRIDE_SEQUENCE) garantit la
+  // sequence relative voulue, mais pas l'ECART entre ces 4 personnes : la
+  // regression isotonique ne garantit qu'un ecart MINIMAL, jamais un ecart
+  // MAXIMAL, donc si la valeur BRUTE de l'une d'elles (issue du parcours
+  // recursif global, tres eloignee si ses propres ancetres ont ete
+  // explores a un tout autre moment de ce parcours) satisfait deja l'ordre
+  // impose, rien ne la rapproche des autres -- constate le 2026-09-21 (
+  // Pierre Jean Marie Duros reste a plus de 5000px des 3 autres). On
+  // resserre donc ici ce groupe precis, dans l'ordre impose, a l'ecart
+  // minimal habituel, centre sur sa propre moyenne actuelle (pour ne pas
+  // decaler tout le reste de l'arbre par rapport a lui).
+  if(RANK_OVERRIDE_SEQUENCE.every(k=>P[k]!==undefined)){
+    const n = RANK_OVERRIDE_SEQUENCE.length;
+    const center = RANK_OVERRIDE_SEQUENCE.reduce((s,k)=>s+P[k],0) / n;
+    RANK_OVERRIDE_SEQUENCE.forEach((k,idx)=>{ P[k] = center + (idx - (n-1)/2) * pitch; });
   }
 
   // ---------- filet de securite : aucune fiche etrangere "entre" 2

@@ -1437,6 +1437,73 @@ function computeAxis(order, maxGen, pitch, offset){
     const center = RANK_OVERRIDE_SEQUENCE.reduce((s,k)=>s+P[k],0) / n;
     RANK_OVERRIDE_SEQUENCE.forEach((k,idx)=>{ P[k] = center + (idx - (n-1)/2) * pitch; });
   }
+  // le resserrement ci-dessus deplace ces 4 personnes, mais PAS leurs
+  // propres parents (lfdt/mjlb, jmc/mflp, pjd/sjh...), calcules avant ce
+  // resserrement : ceux-ci restent alors decentres de leurs enfants
+  // fraichement deplaces. On recentre donc chaque "bloc" d'ascendants
+  // au-dessus de ce groupe precis en le deplacant tout entier (ses propres
+  // parents, grands-parents, etc., par le meme delta rigide) pour qu'il
+  // reste exactement centre sur la moyenne de son ou ses enfant-s ici --
+  // demande explicite de l'utilisateur le 2026-09-21.
+  function collectAncestorBlock(key, visited){
+    if(visited.has(key)) return;
+    visited.add(key);
+    const par = PARENTS[key];
+    if(par){ collectAncestorBlock(par.father, visited); collectAncestorBlock(par.mother, visited); }
+  }
+  // borne le delta pour que ce bloc, une fois deplace, ne s'approche jamais
+  // a moins de `pitch` de son plus proche voisin NON deplace a une
+  // generation qu'il occupe -- sans cette securite, un deplacement rigide
+  // qui ignore les voisins peut les faire chevaucher (constate le
+  // 2026-09-21) ; et relancer ensuite la correction d'ordre habituelle
+  // (finalizeGen) pour l'absorber s'est revele pire encore, ses fusions en
+  // cascade decentrant alors des branches entieres sans rapport. Prefere
+  // donc ici un deplacement plus prudent (parfois incomplet) mais qui ne
+  // touche jamais personne d'autre que ce bloc precis.
+  function maxSafeDelta(visited, desiredDelta){
+    let lo = -Infinity, hi = Infinity;
+    const byGen = {};
+    visited.forEach(k=>{
+      const g = depthOf[k];
+      if(g===undefined || P[k]===undefined) return;
+      (byGen[g] = byGen[g] || []).push(k);
+    });
+    Object.keys(byGen).forEach(g=>{
+      const seq = rankedOrder[g] || [];
+      const members = new Set(byGen[g]);
+      const vals = byGen[g].map(k=>P[k]);
+      const gmin = Math.min(...vals), gmax = Math.max(...vals);
+      let prevVal = null, nextVal = null;
+      seq.forEach(k=>{
+        if(members.has(k) || P[k]===undefined) return;
+        if(P[k]<=gmin && (prevVal===null || P[k]>prevVal)) prevVal = P[k];
+        if(P[k]>=gmax && (nextVal===null || P[k]<nextVal)) nextVal = P[k];
+      });
+      if(prevVal!==null) lo = Math.max(lo, (prevVal+pitch)-gmin);
+      if(nextVal!==null) hi = Math.min(hi, (nextVal-pitch)-gmax);
+    });
+    if(lo>hi) return 0; // aucune marge disponible : ne bouge pas plutot que de forcer un chevauchement
+    return Math.max(lo, Math.min(hi, desiredDelta));
+  }
+  const overrideParentGroups = {};
+  RANK_OVERRIDE_SEQUENCE.forEach(k=>{
+    const par = PARENTS[k];
+    if(!par) return;
+    const pk = par.father+"|"+par.mother;
+    (overrideParentGroups[pk] = overrideParentGroups[pk] || {father:par.father, mother:par.mother, kids:[]}).kids.push(k);
+  });
+  Object.values(overrideParentGroups).forEach(({father, mother, kids})=>{
+    if(P[father]===undefined || P[mother]===undefined) return;
+    const targetAvg = kids.reduce((s,k)=>s+P[k],0) / kids.length;
+    const desiredDelta = targetAvg - (P[father]+P[mother])/2;
+    if(Math.abs(desiredDelta)<0.01) return;
+    const visited = new Set();
+    collectAncestorBlock(father, visited);
+    collectAncestorBlock(mother, visited);
+    const delta = maxSafeDelta(visited, desiredDelta);
+    if(Math.abs(delta)<0.01) return;
+    visited.forEach(k=>{ if(P[k]!==undefined) P[k] += delta; });
+  });
 
   // ---------- filet de securite : aucune fiche etrangere "entre" 2
   // conjoint-s ----------

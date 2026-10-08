@@ -105,6 +105,7 @@ header.masthead .sub{
   font-size:1.04rem;
 }
 header.masthead .sub b{ color:var(--ink); font-weight:600; }
+header.masthead .sub a{ color:var(--brass); white-space:nowrap; }
 
 .legend{
   display:flex; flex-wrap:wrap; justify-content:center; gap:.5rem 1.5rem;
@@ -583,7 +584,7 @@ footer a{ color:var(--brass); }
 
 <header class="masthead">
   <h1>Arbre généalogique de Robin Segura</h1>
-  <p class="sub">Arbre ascendant de <b>Robin Segura</b>, reconstitué acte par acte dans les registres d'état civil des Côtes-d'Armor – 2002–1709.</p>
+  <p class="sub">Arbre ascendant de <b>Robin Segura</b>, reconstitué acte par acte dans les registres d'état civil des Côtes-d'Armor – 2002–1709. <a href="rose-costa.html">Arbre de Rose Costa (côté maternel, Portugal) →</a></p>
   <div class="legend">
     <span><span class="ln p"></span> lignée paternelle (Destouches)</span>
     <span><span class="ln m"></span> lignée maternelle (Duros)</span>
@@ -1775,7 +1776,14 @@ function applyGenVisibility(){
       const uk = currentSiblingInfo[key].unionKey;
       (byUnion[uk] = byUnion[uk] || []).push(key);
     });
-    Object.keys(byUnion).forEach(uk=>{
+    // les blocs sont places du haut vers le bas (ou de gauche a droite) : un
+    // bloc deja place sert ensuite d'obstacle au suivant (cf. plus bas)
+    const unionAnchorCenter = uk => {
+      const a = currentSiblingInfo[byUnion[uk][0]].anchor;
+      const g = currentDepthOf[a];
+      return g===undefined ? 0 : centerOf({left:left(a,g), top:top(a,g)});
+    };
+    Object.keys(byUnion).sort((x,y)=>unionAnchorCenter(x)-unionAnchorCenter(y)).forEach(uk=>{
       if(!expandedUnions.has(uk)) return;
       const extraKeys = byUnion[uk];
       const info0 = currentSiblingInfo[extraKeys[0]];
@@ -1798,8 +1806,34 @@ function applyGenVisibility(){
       const fPos = {left:left(info0.father,fg), top:top(info0.father,fg)};
       const mPos = (mg!==undefined && mg<=visibleMaxGen) ? {left:left(info0.mother,mg), top:top(info0.mother,mg)} : fPos;
       const parentCenter = (centerOf(fPos)+centerOf(mPos))/2;
-      const startOffset = parentCenter - cursor/2;
+      let startOffset = parentCenter - cursor/2;
       const genCoord = isV ? top(anchor,ag) : left(anchor,ag);
+      // le bloc (fratrie + couple du maillon de sang) est centre sur ses
+      // parents, mais sa largeur peut depasser la place libre a cette
+      // generation : il chevauchait alors la fiche voisine, ou le bloc d'une
+      // autre fratrie ouverte (repere le 2026-10-08, 8 enfants d'un couple).
+      // On le decale alors le long de l'axe des freres et soeurs, du cote
+      // qui demande le moins de deplacement, jusqu'a ne plus rien toucher.
+      {
+        const half = (isV ? CARD_W : CARD_H)/2, margin = 16;
+        const blockKeys = new Set([...orderedKeys, anchorSpouse]);
+        const obstacles = [];
+        Object.keys(currentDepthOf).forEach(k=>{
+          if(blockKeys.has(k) || currentDepthOf[k]!==ag) return;
+          obstacles.push(centerOf(posOverride[k] || {left:left(k,ag), top:top(k,ag)}));
+        });
+        const lastCenter = centers[centers.length-1];
+        const extent = off => [off + centers[0] - half, off + lastCenter + spouseExtra + half];
+        const lowest = isV ? 0 : HEADER_H;
+        for(let it=0; it<12; it++){
+          const [lo,hi] = extent(startOffset);
+          const hit = obstacles.filter(o=>o+half+margin>lo && o-half-margin<hi);
+          if(!hit.length) break;
+          const down = Math.max(...hit)+half+margin-lo;
+          const up = Math.min(...hit)-half-margin-hi;
+          startOffset += (lo+up>=lowest && -up<down) ? up : down;
+        }
+      }
 
       orderedKeys.forEach((k,i)=>{
         const c = startOffset + centers[i];

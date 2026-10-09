@@ -632,7 +632,9 @@ const PEOPLE = {
   // non verifiables aux archives comme le reste de l'arbre).
   ms:     {id:"@I500005@", sex:"M", gen:-1, name:"Manuel  Segura", b:"16 MAR 1920", bp:"Crevillente, Espagne", d:"13 DEC 1996", dp:"Sens, Yonne, Bourgogne-Franche-Comté, France", occu:"Boulanger",
     srcNaiss:"Registre civil de Crevillente (Alicante, Espagne), actes de naissance, n°63 — acte inscrit le 18 mars 1920 à 9 h devant le juge municipal Calixto Rico Mora et le secrétaire Cayetano Mas Gallardo, sur déclaration de José Mas Candela (29 ans, marié, journalier, né à Crevillente). L'enfant, prénommé Manuel, est né à Crevillente, calle de Molina, le 16 mars 1920 à 4 h. Fils légitime de Manuel Segura Tomás (29 ans, industriel, né à Crevillente) et de Remedios Morant Crespo (27 ans, née à Crevillente, domiciliée chez son mari). Grands-parents paternels : Manuel Segura (second nom coupé en bord de page ; profession lue « molinero », meunier) et Antonia Tomás Candela, mariés. Grands-parents maternels : Vicente Morant et María Crespo Vicedo, tous deux décédés. Les grands-parents paternels sont natifs de Hondón, les maternels d'Agost. Témoins : Esteban Esquer et Ramón González, majeurs, habitants de la ville ; le déclarant ne sachant pas signer, un témoin signe pour lui. Copie certifiée conforme délivrée par le Registre civil de Crevillent en janvier 2023.",
-    srcImg:"actes/1920-crevillente-naissance-ms.jpg"},
+    srcImg:"actes/1920-crevillente-naissance-ms.jpg",
+    mil:[["Engagement", "Engagé volontaire pour la durée de la guerre, incorporé le 28 juin 1943 comme soldat de 2e classe (recrutement d'Oran, n°2398)"], ["Unités", "Régiment de marche du Tchad (2e division blindée) à partir du 1er novembre 1943 ; dépôt des Forces françaises libres en juillet 1944"], ["Campagnes", "Algérie et Maroc (1943-1944), traversée Alger-Toulon (6-8 novembre 1944), campagne d'Alsace (12 janvier-15 février 1945), campagne d'Allemagne (frontière franchie le 24 avril 1945)"], ["Décoration", "Droit au port de l'insigne américain de la Presidential Unit Citation"], ["Démobilisation", "Démobilisé le 9 octobre 1945 ; se retire à Mers-el-Kébir"], ["Naturalisation", "Naturalisé français par décret du 10 décembre 1946"]],
+    seeAlso:{"label": "Livret militaire, fascicule de mobilisation et naturalisation : voir la page de Manuel Segura (côté espagnol) →", "href": "segura-espagne.html"}},
   mir:    {id:"@I500308@", sex:"F", gen:-1, name:"Mireille  Segura", b:"18 MAR 1952", bp:null, d:null, dp:null, occu:null},
   mic:    {id:"@I500309@", sex:"M", gen:-1, name:"Michel  Segura", b:"26 JUN 1954", bp:"Algérie", d:null, dp:null, occu:null},
   pas:    {id:"@I500003@", sex:"M", gen:-1, name:"Pascal  Segura", b:"26 JUN 1963", bp:"Sens, Yonne, Bourgogne-Franche-Comté, France", d:null, dp:null, occu:null},
@@ -1400,6 +1402,7 @@ function renderSources(p, sp){
     sourceItem("Acte de naissance", fmtDate(p.b), p.srcNaiss, p.srcImg),
     sp ? sourceItem("Acte de mariage", sp.marr && fmtDate(sp.marr.date), sp.marrSrc, sp.marrImg) : "",
     sourceItem("Fiche matricule militaire", "classe 1914", p.srcMilitaire, p.srcMilitaireImg),
+    ...(p.docs||[]).map(d=>sourceItem(d.label, d.date, d.text, d.img)),
     sourceItem("Acte de décès", fmtDate(p.d), p.srcDeces, p.srcDecesImg)
   ].filter(Boolean).join("");
   if(!items) return "";
@@ -1597,6 +1600,9 @@ function renderDetail(key){
   }
 
   html += renderSources(p, sp);
+  if(p.seeAlso){
+    html += `<div class="detail-section"><h4>Dossier complet</h4><div class="detail-row"><a href="${p.seeAlso.href}" style="color:var(--brass)">${p.seeAlso.label}</a></div></div>`;
+  }
 
   html += `<div class="detail-section"><button class="detail-link" id="detailSetRoot" style="color:var(--brass)">🌳 Centrer l'arbre sur cette personne</button></div>`;
 

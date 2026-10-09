@@ -1229,6 +1229,7 @@ function renderSources(p, sp){
     sourceItem("Acte de naissance", fmtDate(p.b), p.srcNaiss, p.srcImg),
     sp ? sourceItem("Acte de mariage", sp.marr && fmtDate(sp.marr.date), sp.marrSrc, sp.marrImg) : "",
     sourceItem("Fiche matricule militaire", "classe 1914", p.srcMilitaire, p.srcMilitaireImg),
+    ...(p.docs||[]).map(d=>sourceItem(d.label, d.date, d.text, d.img)),
     sourceItem("Acte de décès", fmtDate(p.d), p.srcDeces, p.srcDecesImg)
   ].filter(Boolean).join("");
   if(!items) return "";
@@ -1426,6 +1427,9 @@ function renderDetail(key){
   }
 
   html += renderSources(p, sp);
+  if(p.seeAlso){
+    html += `<div class="detail-section"><h4>Dossier complet</h4><div class="detail-row"><a href="${p.seeAlso.href}" style="color:var(--brass)">${p.seeAlso.label}</a></div></div>`;
+  }
 
   html += `<div class="detail-section"><button class="detail-link" id="detailSetRoot" style="color:var(--brass)">🌳 Centrer l'arbre sur cette personne</button></div>`;
 

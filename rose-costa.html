@@ -1372,7 +1372,7 @@ function renderDetail(key){
   html += `<span class="detail-kin${tag?" shared":""}">${tag ? "⑂ "+tag+" — "+kin : kin}</span>`;
   html += `<h3><span class="sexmark">${p.sex==="M"?"♂":"♀"}</span>${displayName(key)}${ageHtml}</h3>`;
   if(p.occu) html += `<div class="detail-occu">${p.occu}</div>`;
-  if(isDescPerson) html += `<div class="detail-occu">Famille contemporaine (gedcom) — non vérifié aux archives</div>`;
+  if(isDescPerson && !p.srcNaiss) html += `<div class="detail-occu">Famille contemporaine (gedcom) — non vérifié aux archives</div>`;
 
   html += `<div class="detail-section"><h4>Naissance</h4>`;
   html += bd ? `<div class="detail-row">° <b>${bd}</b>${p.bp?` — ${p.bp}`:""}</div>` : `<div class="detail-empty">Date non renseignée</div>`;

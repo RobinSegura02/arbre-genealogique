@@ -515,6 +515,23 @@ header.masthead .sub a{ color:var(--brass); white-space:nowrap; }
 @media (max-width:600px){
   .mode-switch button{ width:1.9rem; height:1.9rem; font-size:.8rem; }
 }
+/* curseur de zoom de l'arbre (cf. initZoom), a la suite des fleches de sens */
+.mode-switch{ align-items:center; }
+.zoom-ctl{
+  display:flex; align-items:center; gap:.15rem;
+  margin-left:.15rem; padding-left:.45rem; border-left:1px solid var(--rule);
+}
+.zoom-ctl input[type=range]{ width:7rem; margin:0 .2rem; accent-color:var(--brass); cursor:pointer; }
+.zoom-ctl .zpct{
+  min-width:2.9rem; padding-right:.45rem; text-align:right;
+  font-family:"Fragment Mono",monospace; font-size:.7rem; color:var(--ink-soft);
+  cursor:pointer; user-select:none; white-space:nowrap;
+}
+.zoom-ctl .zpct:hover{ color:var(--brass); }
+@media (max-width:600px){
+  .zoom-ctl input[type=range]{ width:4.2rem; }
+  .zoom-ctl .zpct{ display:none; }
+}
 
 svg.links{ position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
 .link{ fill:none; stroke-width:1.4; shape-rendering:crispEdges; }
@@ -577,6 +594,12 @@ footer a{ color:var(--brass); }
 <div class="mode-switch" id="modeSwitch">
   <button id="modeH" class="active" title="Ascendants alignés horizontalement">↔</button>
   <button id="modeV" title="Ascendants empilés vers le haut">↑</button>
+  <div class="zoom-ctl" id="zoomCtl">
+    <button id="zoomOut" type="button" title="Dézoomer" aria-label="Dézoomer">−</button>
+    <input type="range" id="zoomSlider" min="25" max="200" step="5" value="100" aria-label="Zoom dans l'arbre" title="Zoom dans l'arbre">
+    <button id="zoomIn" type="button" title="Zoomer" aria-label="Zoomer">+</button>
+    <span class="zpct" id="zoomPct" title="Revenir à 100 %">100&#8239;%</span>
+  </div>
 </div>
 <div class="ctx-menu" id="ctxMenu">
   <button id="ctxSetRoot">🌳 Centrer l'arbre sur cette personne</button>
@@ -2571,8 +2594,14 @@ const chartShellEl = document.querySelector(".chart-shell");
 // (.gen-headers.gen-headers-fixed) sur pourquoi le mode horizontal ne peut
 // pas se contenter d'un position:sticky ordinaire. Rappele a chaque rendu
 // (applyGenVisibility) et a chaque defilement (page ou chart-shell).
+// le zoom de l'arbre (cf. initZoom) est un `zoom` CSS pose sur .chart : les
+// mesures d'ecran (getBoundingClientRect) sont alors multipliees par ce
+// facteur, alors que les valeurs `left`/`width` posees sur le sommaire (qui
+// est DANS .chart) y sont multipliees a l'affichage : on les divise donc.
+function chartZoom(){ return parseFloat(chart.style.zoom) || 1; }
 function updateGenHeadersLock(){
   const isV = layoutMode==="vertical";
+  const z = chartZoom();
   headersEl.classList.toggle("sticky-left", isV);
   if(isV){
     headersEl.classList.remove("gen-headers-fixed");
@@ -2589,11 +2618,11 @@ function updateGenHeadersLock(){
     // retrecit, ex. generations masquees).
     const shellPad = parseFloat(getComputedStyle(chartShellEl).paddingLeft) || 0;
     const targetScreenLeft = chartShellEl.getBoundingClientRect().left + shellPad;
-    headersEl.style.left = (targetScreenLeft - chart.getBoundingClientRect().left) + "px";
+    headersEl.style.left = ((targetScreenLeft - chart.getBoundingClientRect().left) / z) + "px";
     return;
   }
   const shellRect = chartShellEl.getBoundingClientRect();
-  const headerH = headersEl.offsetHeight || 42;
+  const headerH = (headersEl.offsetHeight || 42) * z;
   const locked = shellRect.top < 0 && shellRect.bottom > headerH;
   headersEl.classList.toggle("gen-headers-fixed", locked);
   if(locked){
@@ -2602,8 +2631,8 @@ function updateGenHeadersLock(){
     // sinon les en-tetes par rapport aux fiches d'autant. Le rect de .chart
     // integre deja le defilement horizontal en cours, donc aucune
     // translation supplementaire n'est necessaire ici.
-    headersEl.style.left = chart.getBoundingClientRect().left+"px";
-    headersEl.style.width = shellRect.width+"px";
+    headersEl.style.left = (chart.getBoundingClientRect().left / z)+"px";
+    headersEl.style.width = (shellRect.width / z)+"px";
   } else {
     headersEl.style.left = "";
     headersEl.style.width = lastTotalW+"px";
@@ -2658,6 +2687,52 @@ chartShellEl.addEventListener("scroll", updateGenHeadersLock, {passive:true});
   // (le mouseup correspondant n'est alors jamais recu) : sans ca, `dragging`
   // resterait bloque a `true` et un simple survol relancerait le defilement.
   window.addEventListener("blur", endDrag);
+})();
+
+// ---------- Zoom dans l'arbre (curseur a cote du sens d'affichage) ----------
+// `zoom` CSS sur .chart : toute la mise en page (fiches, traits, sommaire,
+// hauteur de page, barres de defilement) suit, sans toucher aux calculs de
+// position. Le point au centre de la fenetre reste en place pendant le zoom.
+// Navigateur sans `zoom` CSS : le curseur est masque.
+(function initZoom(){
+  const ctl = document.getElementById("zoomCtl");
+  const slider = document.getElementById("zoomSlider");
+  const pct = document.getElementById("zoomPct");
+  if(!ctl || !slider || !window.CSS || !CSS.supports || !CSS.supports("zoom","1.5")){
+    if(ctl) ctl.style.display = "none";
+    return;
+  }
+  const MIN = 0.25, MAX = 2;
+  function show(z){
+    slider.value = Math.round(z*100);
+    pct.textContent = Math.round(z*100) + "\u202f%";
+  }
+  function setZoom(z, anchor){
+    z = Math.min(MAX, Math.max(MIN, Math.round(z*100)/100));
+    const old = chartZoom();
+    if(z === old){ show(z); return; }
+    let ux = 0, uy = 0, cx = window.innerWidth/2, cy = window.innerHeight/2;
+    if(anchor){
+      const cr = chart.getBoundingClientRect();
+      ux = (cx - cr.left)/old; uy = (cy - cr.top)/old;
+    }
+    chart.style.zoom = z;
+    if(anchor){
+      const cr2 = chart.getBoundingClientRect();
+      chartShellEl.scrollLeft += (cr2.left + ux*z) - cx;
+      window.scrollBy(0, (cr2.top + uy*z) - cy);
+    }
+    show(z);
+    try{ localStorage.setItem("arbreZoom", String(z)); }catch(e){}
+    updateGenHeadersLock();
+  }
+  slider.addEventListener("input", ()=>setZoom(slider.value/100, true));
+  document.getElementById("zoomOut").addEventListener("click", ()=>setZoom(chartZoom() - 0.1, true));
+  document.getElementById("zoomIn").addEventListener("click", ()=>setZoom(chartZoom() + 0.1, true));
+  pct.addEventListener("click", ()=>setZoom(1, true));
+  let saved = NaN;
+  try{ saved = parseFloat(localStorage.getItem("arbreZoom")); }catch(e){}
+  if(saved >= MIN && saved <= MAX) setZoom(saved, false); else show(1);
 })();
 
 let currentRoot = null, currentOrder = null, currentDepthOf = null, currentMaxGen = 0, currentTags = null;

@@ -1699,11 +1699,20 @@ backBtn.addEventListener("click", ()=>{
 });
 
 // ---------- Bascule horizontal / vertical ----------
-let layoutMode = "horizontal";
+// affichage vertical par defaut ; le sens choisi est memorise (localStorage)
+// et repris d'une page du site a l'autre
+let layoutMode = "vertical";
+try{
+  const savedMode = localStorage.getItem("arbreMode");
+  if(savedMode==="horizontal" || savedMode==="vertical") layoutMode = savedMode;
+}catch(e){}
 const modeHBtn = document.getElementById("modeH"), modeVBtn = document.getElementById("modeV");
+modeHBtn.classList.toggle("active", layoutMode==="horizontal");
+modeVBtn.classList.toggle("active", layoutMode==="vertical");
 function setMode(mode){
   if(mode===layoutMode) return;
   layoutMode = mode;
+  try{ localStorage.setItem("arbreMode", mode); }catch(e){}
   modeHBtn.classList.toggle("active", mode==="horizontal");
   modeVBtn.classList.toggle("active", mode==="vertical");
   applyGenVisibility();
